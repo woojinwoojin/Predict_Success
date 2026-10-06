@@ -1,0 +1,13 @@
+# 비밀키
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 수집 원본·DB (공개 가능한 샘플만 따로 커밋)
+data/raw/
+data/interim/
+*.sqlite
+*.db
