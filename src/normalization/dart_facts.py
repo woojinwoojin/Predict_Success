@@ -7,7 +7,7 @@ import html
 import json
 import re
 import zipfile
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -49,14 +49,25 @@ def _iso(y, m, d) -> str:
 
 
 def is_plausible_fiscal_period(start: str, end: str) -> bool:
-    """사업연도는 1년을 넘을 수 없다(상법·법인세법). 당기·전기 열이 나란히 있는 표를 평문으로 펴면
-    "제12기 2024년 1월 1일부터 2025년 12월 31일까지"처럼 다른 열의 날짜가 이어 붙는데, 이런 매치를 걸러낸다."""
+    """잘못 붙은 날짜를 막는 규칙. 당기·전기 열이 나란히 있는 표를 평문으로 펴면
+    "제12기 2024년 1월 1일부터 2025년 12월 31일까지"처럼 다른 열의 날짜가 이어 붙는다.
+    역순이거나 1년을 넘는 매치만 버린다(국내 사업연도는 1년을 넘을 수 없다: 상법·법인세법).
+    1년보다 짧은 기간(결산기 변경 등)은 정상으로 받아들인다 — 연간 여부는 is_annual_period로 따로 표시한다."""
     s, e = date.fromisoformat(start), date.fromisoformat(end)
     try:
         one_year_later = s.replace(year=s.year + 1)
     except ValueError:  # 2월 29일 시작
         one_year_later = date(s.year + 1, 3, 1)
     return s <= e < one_year_later
+
+
+def is_annual_period(start: str, end: str) -> bool:
+    """정상적인 12개월 기간인지. 짧은 기간을 막지는 않고, 기간 비교 지표에서 주의하도록 표시만 한다."""
+    s, e = date.fromisoformat(start), date.fromisoformat(end)
+    try:
+        return (e - s).days + 1 in (365, 366) and e == s.replace(year=s.year + 1) - timedelta(days=1)
+    except ValueError:
+        return False
 
 
 def fiscal_periods_from_filing(zip_path: Path) -> dict[int, tuple[str, str] | None]:
@@ -139,6 +150,7 @@ def flatten_snapshot(snapshot_id: str, response: dict, meta: dict, filings: dict
                 "raw_amount": item[column], "value": None if value is None else str(value), "value_status": value_status,
                 "currency": item.get("currency"), "unit": UNIT, "unit_multiplier": UNIT_MULTIPLIER,
                 "period_type": period_type, "period_start": period_start, "period_end": period_end, "period_status": period_status,
+                "period_is_annual": None if period is None or period_type is None else is_annual_period(*period),
                 "rcept_no": rcept_no, "rcept_dt": filing.get("rcept_dt"), "report_nm": filing.get("report_nm"),
                 "filing_link": filing["link"], "collected_at": meta["collected_at"],
             })
@@ -183,7 +195,8 @@ def same_period_mismatches(rows: list[dict]) -> dict:
         key = account_key(r)
         if key + (r["corp_code"],) in ambiguous:
             continue
-        groups.setdefault((r["corp_code"], r["fs_div"]) + key + (r["period_type"], r["period_start"], r["period_end"]), []).append(r)
+        # 비교 조건: 기업·연결/별도·재무제표·계정·세부 구분·기간 유형·기간·통화가 모두 같아야 같은 값으로 본다
+        groups.setdefault((r["corp_code"], r["fs_div"]) + key + (r["period_type"], r["period_start"], r["period_end"], r["currency"]), []).append(r)
     compared = {k: g for k, g in groups.items() if len({(r["rcept_no"], r["source_column"]) for r in g}) > 1}
     mismatched = {k: g for k, g in compared.items() if len({Decimal(r["value"]) for r in g}) > 1}
     return {"compared_groups": len(compared), "mismatched": mismatched, "ambiguous_keys": len(ambiguous)}
@@ -195,4 +208,6 @@ def mismatch_kind(group: list[dict]) -> dict:
     return {
         "kind": "sign_only" if len({abs(v) for v in values}) == 1 else "magnitude",
         "label_changed": len({r["account_nm"] for r in group}) > 1,
+        # 표준코드 없이 계정명으로 묶인 그룹 — 서로 다른 항목이 같은 이름일 수 있어 신뢰도가 낮다
+        "nonstandard_key": account_key(group[0])[1].startswith("name:"),
     }

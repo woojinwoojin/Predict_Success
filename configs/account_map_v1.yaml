@@ -1,0 +1,111 @@
+# 원본 계정 → 내부 계산용 계정(canonical_account) 매핑 규칙 (docs/decisions.md D6)
+#
+# - 원본 account_id는 그대로 보존한다. 표준코드가 없으면("-표준계정코드 미사용-") 없는 그대로 두고,
+#   여기서 canonical_account만 붙인다. 없는 DART 표준코드를 만들어 붙이지 않는다.
+# - 규칙은 재무제표(sj_div)와 세부 구분(account_detail)까지 맞아야 적용된다.
+# - 이름 규칙은 완전히 같은 이름만 쓴다(유사도 금지). 근거(why)를 함께 적는다.
+# - review: 후보로만 보여주고 자동 선택하지 않는다. forbidden: 대체 사용 금지.
+version: account_map_v1
+nonstandard_account_id: "-표준계정코드 미사용-"
+statements:
+  income: [IS, CIS]
+  balance: [BS]
+  cash_flow: [CF]
+
+accounts:
+  revenue:
+    label: 매출
+    match:
+      - {statement: income, account_id: ifrs-full_Revenue, account_detail: "-"}
+
+  cost_of_sales:
+    label: 매출원가
+    match:
+      - {statement: income, account_id: ifrs-full_CostOfSales, account_detail: "-"}
+
+  operating_income:
+    label: 영업이익
+    match:
+      - {statement: income, account_id: dart_OperatingIncomeLoss, account_detail: "-"}
+
+  net_income:
+    label: 당기순이익
+    match:
+      # 현금흐름표(간접법) 첫 줄에도 같은 코드가 나온다 — 손익계산서 것만 쓴다
+      - {statement: income, account_id: ifrs-full_ProfitLoss, account_detail: "-"}
+
+  operating_cash_flow:
+    label: 영업현금흐름
+    match:
+      - {statement: cash_flow, account_id: ifrs-full_CashFlowsFromUsedInOperatingActivities, account_detail: "-"}
+
+  total_assets:
+    label: 총자산
+    match:
+      - {statement: balance, account_id: ifrs-full_Assets, account_detail: "-"}
+
+  total_liabilities:
+    label: 총부채
+    match:
+      - {statement: balance, account_id: ifrs-full_Liabilities, account_detail: "-"}
+
+  current_assets:
+    label: 유동자산
+    match:
+      - {statement: balance, account_id: ifrs-full_CurrentAssets, account_detail: "-"}
+
+  current_liabilities:
+    label: 유동부채
+    match:
+      - {statement: balance, account_id: ifrs-full_CurrentLiabilities, account_detail: "-"}
+
+  cash:
+    label: 현금및현금성자산
+    match:
+      # 현금흐름표의 기초·기말 현금은 다른 코드(dart_CashAndCashEquivalentsAt...)라 섞이지 않지만, 재무상태표로 한정한다
+      - {statement: balance, account_id: ifrs-full_CashAndCashEquivalents, account_detail: "-"}
+
+  inventory:
+    label: 재고자산
+    match:
+      - {statement: balance, account_id: ifrs-full_Inventories, account_detail: "-"}
+      - {statement: balance, nonstandard_name: "재고자산", account_detail: "-",
+         why: "재무상태표의 '재고자산' 행. 표준코드만 빠진 같은 계정 (같은 회사 다른 연도는 ifrs-full_Inventories)"}
+
+  interest_expense:
+    label: 이자비용
+    match: []  # 손익계산서 본문에 '이자비용' 행이 없다. 확인된 값은 원문 주석에서 가져와야 한다
+    review:
+      - {statement: cash_flow, account_id: dart_AdjustmentsForInterestExpenses,
+         why: "간접법 현금흐름표 조정항목의 이자비용. 손익의 이자비용과 같은지 주석으로 대조하기 전에는 쓰지 않는다"}
+    forbidden:
+      - {statement: income, account_id: ifrs-full_FinanceCosts,
+         why: "금융원가·금융비용 전체는 외환차손·파생손실 등을 포함한다. 이자비용으로 대체하지 않는다"}
+      - {statement: income, nonstandard_name: "금융비용", why: "위와 같음"}
+      - {statement: income, nonstandard_name: "금융원가", why: "위와 같음"}
+
+  short_term_interest_bearing_debt:
+    label: 단기 이자부채
+    composite: true  # 구성 항목의 합. 하나라도 확인 필요면 합계를 내지 않는다
+    match:
+      - {statement: balance, account_id: ifrs-full_ShorttermBorrowings}
+      - {statement: balance, account_id: ifrs-full_CurrentPortionOfLongtermBorrowings}
+      - {statement: balance, account_id: ifrs-full_CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived}
+      - {statement: balance, account_id: ifrs-full_CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued}
+      - {statement: balance, account_id: dart_CurrentPortionOfBonds}
+      - {statement: balance, account_id: dart_CurrentPortionOfConvertibleBonds}
+      - {statement: balance, nonstandard_name: "단기차입금", why: "이름이 유동(단기)임을 명시"}
+      - {statement: balance, nonstandard_name: "유동성장기부채", why: "1년 내 상환할 장기 차입금·사채. 이름이 유동임을 명시"}
+      - {statement: balance, nonstandard_name: "유동성장기차입금", why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "유동성사채", why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "전환사채(유동)", why: "이름이 유동임을 명시"}
+    policy_pending:
+      # 리스부채를 이자부채에 넣을지는 아직 정하지 않았다. 합계에서 빼고 따로 보여준다
+      - {statement: balance, account_id: ifrs-full_CurrentLeaseLiabilities, why: "유동 리스부채 — 포함 여부 결정 필요"}
+    review:
+      - {statement: balance, account_id: ifrs-full_CurrentFinancialLiabilities, why: "단기금융부채 — 차입금이 합쳐져 있을 수 있다. 주석으로 구성 확인"}
+      - {statement: balance, account_id: ifrs-full_OtherCurrentFinancialLiabilities, why: "위와 같음"}
+      - {statement: balance, account_id: dart_CurrentPortionOfConvertibleRedeemablePreferredStockLiabilities, why: "상환전환우선주부채 — 이자부채 포함 여부 확인"}
+      - {statement: balance, nonstandard_name: "차입금", why: "유동·비유동 구분이 이름에 없다"}
+      - {statement: balance, nonstandard_name: "사채", why: "유동·비유동 구분이 이름에 없다"}
+      - {statement: balance, nonstandard_name: "전환사채", why: "유동·비유동 구분이 이름에 없다"}

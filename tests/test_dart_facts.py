@@ -129,8 +129,8 @@ def test_different_values_are_flagged_with_kind_not_called_restatement():
     rows = flatten([item(fr="90")]) + report_2024(th="-90")
     result = same_period_mismatches(rows)
     (key, group), = result["mismatched"].items()
-    assert key[-1] == "2024-12-31"
-    assert mismatch_kind(group) == {"kind": "sign_only", "label_changed": False}
+    assert key[-2:] == ("2024-12-31", "KRW")  # 기간 + 통화
+    assert mismatch_kind(group) == {"kind": "sign_only", "label_changed": False, "nonstandard_key": False}
 
     rows = flatten([item(fr="90")]) + report_2024(th="95")
     (_, group), = same_period_mismatches(rows)["mismatched"].items()
