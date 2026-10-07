@@ -7,6 +7,13 @@
 
 ## ▶ 다음에 이어서 할 일 (2026-10-07~)
 
+**다음 세션 시작점 (2026-10-07 마감 기준)**
+- 다음 작업: **9-3 2022~2025 추세 비교** — 연도별 지표, 일회성 운전자본 변화·연결 범위 변화(`data/manual/scope_changes.csv`) 표시, 과거 연도의 보류 항목(단기 이자부채 후보값 12행, 매각예정 금액 결측 3행) 처리
+- 전체 실행: `.venv\Scripts\python -m src.pipeline.run_pilot_2025` → `data/interim/runs/{run_id}/` (결과 + `manifest.json`). 테스트: `.venv\Scripts\python -m pytest`
+- 현재 상태: 2025 지표 75개(정상 66 · 참고 4 · 계산 안 함 5), 점수 규칙 v2 채택·미검증, 종합점수 보류 (시장 지표 미구현, 비교군 n < 20, AI 미제공)
+- 설계 결정 D1~D13은 [decisions.md](decisions.md), 점수 규칙 근거는 [scoring_rules_v2.md](scoring_rules_v2.md)
+
+
 1. [x] OpenDART 인증키 발급 확인 (2026-10-07 발급, 기업개황 API로 동작 확인)
 2. [x] 1주차 문제 정의 (1-1) → [problem.md](problem.md)
 3. [x] 파일럿 5개 확정 + 2025 수치 원문 대조 (D2), 자료 처리 원칙 기록 (D3)
