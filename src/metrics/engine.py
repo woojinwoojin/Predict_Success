@@ -88,7 +88,7 @@ def ocf_to_avg_assets(get) -> Result:
 
 def debt_ratio(get) -> Result:
     tl, ta = get("total_liabilities", 2025), get("total_assets", 2025)
-    r = combine(Result("debt_ratio", "부채비율 (총부채/총자산)", "2025말"), [tl, ta])
+    r = combine(Result("debt_ratio", "부채/자산 비율 (총부채 ÷ 총자산)", "2025말"), [tl, ta])
     if r.calc_status != "not_computed":
         if ta.value <= 0:
             r.calc_status, r.score_eligible = "not_computed", "보류"

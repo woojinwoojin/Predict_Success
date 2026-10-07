@@ -12,7 +12,7 @@ def entry(**kw):
     base = {"confirmation_id": "C1", "corp_code": "01009789", "fs_div": "CFS", "canonical_account": "interest_expense",
             "period_type": "duration", "period_start": "2025-01-01", "period_end": "2025-12-31", "value": "46,717,900", "unit": "천원",
             "unit_multiplier": "1000", "rcept_no": "R2025", "source_location": "주석 29", "components": "", "status": "confirmed",
-            "extraction_method": "manual", "amount_check": "확인", "scope_check": "", "method": "test"}
+            "extraction_method": "manual", "amount_check": "확인", "scope_check": "", "component_check": "해당 없음", "method": "test", "api_relation": ""}
     return {**base, **kw}
 
 
@@ -72,3 +72,28 @@ def test_scope_unconfirmed_note_value_is_only_a_candidate():
     assert result["value"] == "46717900000"
     result = apply_confirmations(with_basis, [entry(amount_check="확인", scope_check="확인")], KEY, "R2025", "2025-12-31")
     assert result["status"] == "mapped"
+
+
+def test_partial_components_never_make_a_normal_debt_total():
+    debt = {"canonical_account": "short_term_interest_bearing_debt", "label": "단기 이자부채", "basis": "리스 포함",
+            "status": "review_needed", "value": None, "note": ""}
+    partial = entry(canonical_account="short_term_interest_bearing_debt", period_end="2025-12-31", value="100", unit="원", unit_multiplier="1",
+                    scope_check="확인", component_check="부분")
+    assert apply_confirmations(debt, [partial], KEY, "R2025", "2025-12-31")["status"] == "candidate"
+    complete = {**partial, "component_check": "확인"}
+    assert apply_confirmations(debt, [complete], KEY, "R2025", "2025-12-31")["status"] == "mapped"
+
+
+def test_unconfirmed_amount_is_not_used():
+    assert apply_confirmations(REVIEW, [entry(amount_check="미확인")], KEY, "R2025", "2025-12-31")["status"] == "review_needed"
+
+
+def test_manual_total_replaces_api_total_only_when_marked_and_components_confirmed():
+    api = {"canonical_account": "short_term_interest_bearing_debt", "label": "단기 이자부채", "basis": "리스 포함",
+           "status": "mapped", "value": "5000", "note": ""}
+    fuller = entry(canonical_account="short_term_interest_bearing_debt", value="6364", unit="원", unit_multiplier="1",
+                   scope_check="확인", component_check="확인")
+    assert apply_confirmations(api, [fuller], KEY, "R2025", "2025-12-31")["status"] == "review_needed"  # 사유 없이 다르면 확인 필요
+    marked = {**fuller, "api_relation": "replaces_incomplete_api"}
+    result = apply_confirmations(api, [marked], KEY, "R2025", "2025-12-31")
+    assert (result["status"], result["value"]) == ("mapped", "6364")

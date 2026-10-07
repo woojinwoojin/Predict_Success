@@ -11,7 +11,9 @@ import pandas as pd
 
 REQUIRED = ["confirmation_id", "corp_code", "fs_div", "canonical_account", "period_type", "period_end", "value",
             "unit", "unit_multiplier", "rcept_no", "source_location", "status", "extraction_method",
-            "amount_check", "scope_check", "method"]
+            "amount_check", "scope_check", "component_check", "method", "api_relation"]
+# 구성 항목의 합인 계정: 구성요소가 모두 확인돼야(component_check = 확인) 정상 합계로 쓴다
+COMPONENT_ACCOUNTS = {"short_term_interest_bearing_debt"}
 
 
 def load_confirmations(path: Path) -> list[dict]:
@@ -53,9 +55,21 @@ def apply_confirmations(result: dict, entries: list[dict], key: dict, selected_r
     entry = usable[0]
     manual_value = won(entry)
     if result["status"] == "mapped" and Decimal(result["value"]) != manual_value:
+        # 구성 항목이 빠진 API 합계를 수기로 대체하는 경우만 허용한다: 합계 계정 + 구성요소 확인 + 대체 사유 명시
+        replaces = (entry.get("api_relation") == "replaces_incomplete_api" and result["canonical_account"] in COMPONENT_ACCOUNTS
+                    and entry.get("component_check") == "확인")
+        if not replaces:
+            return {**result, "status": "review_needed", "value": None, "extraction_method": "",
+                    "note": f"API 값 {result['value']}와 수기 확인값 {manual_value}({entry['confirmation_id']})이 다름"}
+        return {**result, "status": "mapped", "value": str(manual_value), "extraction_method": "manual",
+                "note": f"수기 확인 {entry['confirmation_id']}가 구성이 빠진 API 합계 {result['value']}를 대체: {entry.get('note', '')}"}
+    # 금액 확인, 범위(예: 리스 이자 포함) 확인, 구성요소 확인은 따로 본다 (D10). 미확인은 확인으로 승격하지 않는다
+    if entry.get("amount_check") != "확인":
         return {**result, "status": "review_needed", "value": None, "extraction_method": "",
-                "note": f"API 값 {result['value']}와 수기 확인값 {manual_value}({entry['confirmation_id']})이 다름"}
-    # 금액 확인과 범위(예: 리스 이자 포함) 확인은 따로 본다. 범위가 미확인이면 계산용 후보로만 쓰고 점수는 보류한다
+                "note": f"수기 확인 {entry['confirmation_id']}: 금액 미확인"}
+    if result["canonical_account"] in COMPONENT_ACCOUNTS and entry.get("component_check") != "확인":
+        return {**result, "status": "candidate", "value": str(manual_value), "extraction_method": "manual",
+                "note": f"수기 확인 {entry['confirmation_id']}: 구성요소 {entry.get('component_check') or '미확인'} — 정상 합계 아님, 점수 반영 보류; {entry.get('note', '')}"}
     scope_ok = not result.get("basis") or entry.get("scope_check") == "확인"
     if not scope_ok:
         return {**result, "status": "candidate", "value": str(manual_value), "extraction_method": "manual",
