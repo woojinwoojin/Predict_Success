@@ -1,0 +1,12 @@
+# 파일럿 5개사와 수집 범위 (docs/decisions.md D2, D4)
+version: pilot_v1
+industry_ksic: "20423"  # 화장품 제조업
+bsns_years: [2022, 2023, 2024, 2025]
+reprt_code: "11011"  # 사업보고서 (분기·반기는 V1 수집 제외)
+fs_divs: [CFS, OFS]  # 연결, 별도 — 둘 다 조회하고 "자료 없음"도 기록한다
+companies:
+  - {corp_code: "01009789", name: 코스맥스, role: "기본 계산 · 해외 종속회사를 포함한 연결자료 처리"}
+  - {corp_code: "00763473", name: 코스메카코리아, role: "기본 계산 · 정정공시 이력 처리"}
+  - {corp_code: "01226410", name: 씨앤씨인터내셔널, role: "기본 계산과 원문 대조"}
+  - {corp_code: "00160621", name: 한국화장품제조, role: "별도재무만 있는 사례 · 정정자료 처리"}
+  - {corp_code: "00939331", name: 한국콜마, role: "여러 사업이 섞인 연결자료의 비교 가능성 판단"}
