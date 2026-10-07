@@ -4,7 +4,7 @@
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.collectors.dart import parse_annual_report_name
@@ -42,6 +42,7 @@ class Selection:
     snapshot_id: str | None
     rcept_no: str | None
     note: str
+    warnings: list[str] = field(default_factory=list)
 
 
 def select_snapshot(snaps: list[dict], published: dict, filings: dict, corp_code: str, fs_div: str, bsns_year: int, as_of: str) -> Selection:
@@ -54,10 +55,16 @@ def select_snapshot(snaps: list[dict], published: dict, filings: dict, corp_code
         return Selection("held", None, selected, f"선택된 보고서 {selected}의 원문 미저장 — 이전 보고서로 대체하지 않음")
     matching = [s for s in group if s["status"] == "000" and s["rcept_nos"] == [selected]]
     if matching:
-        # 같은 보고서를 여러 번 조회했으면 가장 최근 수집을 쓴다 (run_id는 수집 시각 순)
+        # 같은 보고서를 여러 번 조회했으면 가장 최근 수집을 쓴다 (run_id는 수집 시각 순). 이전 응답은 보존한다
         latest = max(matching, key=lambda s: s["snapshot_id"].rsplit("/", 1)[-1])
         note = f"같은 보고서 스냅샷 {len(matching)}개 중 최근 수집" if len(matching) > 1 else ""
-        return Selection("selected", latest["snapshot_id"], selected, note)
+        # 같은 접수번호·조회 조건인데 응답 내용(해시)이 바뀌었으면 경고 (D12)
+        hashes = {s.get("sha256") for s in matching}
+        warnings = []
+        if len(hashes) > 1:
+            warnings.append(f"응답 내용 변경: 같은 보고서 {selected}의 스냅샷 {len(matching)}개, 해시 {len(hashes)}종 — 최근 수집본 사용, 이전 응답 보존: "
+                            + ", ".join(sorted(s["snapshot_id"].rsplit("/", 1)[-1] for s in matching)))
+        return Selection("selected", latest["snapshot_id"], selected, "; ".join(filter(None, [note] + warnings)), warnings)
     if group and all(s["status"] == "013" for s in group):
         latest = max(group, key=lambda s: s["snapshot_id"].rsplit("/", 1)[-1])
         return Selection("no_data", latest["snapshot_id"], selected, "API 응답: 조회된 데이터 없음")

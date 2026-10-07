@@ -171,9 +171,9 @@ def test_latest_valid_filing_respects_as_of_and_skips_attachment_corrections():
     assert latest_valid_filing(PUBLISHED, "c", 2024, "20250101") is None  # 아직 공개 전 → 보류
 
 
-def snap(run, rcept, status="000"):
+def snap(run, rcept, status="000", sha="h1"):
     return {"snapshot_id": f"c/api/fnlttSinglAcntAll/2024/11011/CFS/{run}", "corp_code": "c", "fs_div": "CFS", "bsns_year": "2024",
-            "status": status, "rcept_nos": [rcept] if status == "000" else []}
+            "status": status, "rcept_nos": [rcept] if status == "000" else [], "sha256": sha}
 
 
 def test_unstored_latest_filing_is_held_not_replaced_by_older_one():
@@ -199,3 +199,18 @@ def test_repeated_collection_of_same_report_uses_latest_run():
     snaps = [snap("20261001T000000Z", "c"), snap("20261005T000000Z", "c")]
     sel = select_snapshot(list(reversed(snaps)), PUBLISHED, filings, "c", "CFS", 2024, "20261007")
     assert sel.snapshot_id.endswith("20261005T000000Z")
+
+
+def test_changed_response_for_same_report_is_warned_and_latest_is_used():
+    filings = {"c": {"link": "stored"}}
+    snaps = [snap("20261001T000000Z", "c", sha="old"), snap("20261005T000000Z", "c", sha="new")]
+    sel = select_snapshot(snaps, PUBLISHED, filings, "c", "CFS", 2024, "20261007")
+    assert sel.snapshot_id.endswith("20261005T000000Z")
+    assert sel.warnings and "응답 내용 변경" in sel.warnings[0]
+    assert "20261001T000000Z" in sel.warnings[0]  # 이전 응답이 보존돼 있음을 알린다
+
+
+def test_identical_repeated_responses_are_not_warned():
+    filings = {"c": {"link": "stored"}}
+    snaps = [snap("20261001T000000Z", "c", sha="same"), snap("20261005T000000Z", "c", sha="same")]
+    assert select_snapshot(snaps, PUBLISHED, filings, "c", "CFS", 2024, "20261007").warnings == []

@@ -188,7 +188,7 @@ def build_facts(raw_root: Path) -> tuple[list[dict], list[dict]]:
         flat = flatten_snapshot(snapshot_id, response, meta, filings, periods)
         rows.extend(flat)
         snaps.append({"snapshot_id": snapshot_id, **meta["request"], "status": meta["status"], "rows": len(flat),
-                      "rcept_nos": meta.get("rcept_nos", [])})
+                      "rcept_nos": meta.get("rcept_nos", []), "sha256": meta.get("sha256"), "collected_at": meta.get("collected_at")})
     annotate_sections(rows)  # 재무상태표 행의 유동·비유동 구간 (소계 합으로 확인된 것만)
     return rows, snaps
 

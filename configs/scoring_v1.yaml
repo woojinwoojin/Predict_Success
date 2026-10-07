@@ -1,0 +1,44 @@
+# 점수 규칙 (README 7.1, 제안 근거는 docs/scoring_proposal_v1.md)
+version: scoring_v1
+status: proposed  # proposed | confirmed — 확정 전 점수는 변환·기여도 계산의 검증용이다
+proposed_at: "2026-10-07"
+confirmed_at: null
+reviewed_by: null
+
+structured_total: 90
+areas:
+  financial_stability: {label: 재무 안정성·현금창출, weight: 35}
+  growth: {label: 성장성과 지속성, weight: 20}
+  operations: {label: 운영 경쟁력, weight: 20}
+  market: {label: 시장·외부환경, weight: 15, implemented: false}
+ai_weight: 10  # 구조화 점수와 분리. 미구현
+
+peer_scoring:
+  min_peer_size: 20  # n < 20이면 A 방식 점수는 검증용 (점수에 넣지 않음)
+
+# method B의 points: [값, 점수] — 사이는 선형 보간, 양 끝 밖은 끝점 점수로 고정
+metrics:
+  ocf_to_avg_assets: {area: financial_stability, weight: 10, method: B, direction: higher,
+                      points: [[0.0, 0], [0.05, 50], [0.10, 80], [0.15, 100]]}
+  debt_ratio: {area: financial_stability, weight: 8, method: B, direction: lower,
+               points: [[0.20, 100], [0.40, 80], [0.60, 50], [0.80, 20], [1.00, 0]]}
+  interest_coverage: {area: financial_stability, weight: 7, method: B, direction: higher,
+                      points: [[1, 0], [3, 50], [5, 70], [10, 90], [20, 100]]}
+  current_ratio_hfs: {area: financial_stability, weight: 5, method: B, direction: range,
+                      points: [[0.5, 0], [1.0, 40], [1.5, 70], [2.0, 90], [3.0, 90]]}
+  cash_to_short_term_debt: {area: financial_stability, weight: 5, method: B, direction: higher,
+                            points: [[0, 0], [0.25, 30], [0.5, 50], [1.0, 80], [2.0, 100]]}
+  revenue_cagr_3y: {area: growth, weight: 8, method: B, direction: higher,
+                    points: [[-0.10, 0], [0.0, 30], [0.05, 50], [0.10, 70], [0.20, 90], [0.30, 100]]}
+  growth_gap: {area: growth, weight: 7, method: A, direction: higher, base_metric: revenue_cagr_3y}
+  growth_volatility: {area: growth, weight: 5, method: B, direction: lower,
+                      points: [[0.05, 100], [0.10, 70], [0.20, 40], [0.40, 0]],
+                      cap_if_all_decline: 30}  # 3년 연속 감소면 최대 30점
+  operating_margin_gap: {area: operations, weight: 8, method: A, direction: higher, base_metric: operating_margin}
+  roa_gap: {area: operations, weight: 6, method: A, direction: higher, base_metric: roa}
+  inventory_turnover_rel: {area: operations, weight: 6, method: A, direction: higher, base_metric: inventory_turnover, cap: 90}
+
+# 점수에 넣지 않는 지표 (배점 0)
+view_only: [current_ratio_reported]
+# 자체 원시값 (비교군 지표의 바탕). 점수는 비교군 지표로만
+raw_only: [operating_margin, roa, inventory_turnover]
