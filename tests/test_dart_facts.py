@@ -5,7 +5,7 @@ import zipfile
 
 from src.normalization.build_facts import latest_valid_filing
 from src.normalization.dart_facts import (
-    fiscal_periods_from_filing, flatten_snapshot, is_plausible_fiscal_period, mismatch_kind, parse_amount,
+    fiscal_periods_from_filing, flatten_snapshot, mismatch_kind, parse_amount,
     same_period_mismatches,
 )
 
@@ -69,19 +69,34 @@ def test_equity_statement_period_type_is_left_for_review():
     assert {r["period_status"] for r in rows} == {"review_needed:period_type"}
 
 
-def test_side_by_side_columns_do_not_create_two_year_periods():
-    assert is_plausible_fiscal_period("2024-01-01", "2024-12-31")
-    assert not is_plausible_fiscal_period("2024-01-01", "2025-12-31")  # 옆 열의 종료일이 붙은 매치
-    assert not is_plausible_fiscal_period("2025-01-01", "2024-12-31")
-
-
 def test_fiscal_periods_are_read_from_filing_text(tmp_path):
+    # 위: 문단으로 적힌 정상 기간. 아래: 당기·전기 열이 나란히 있는 표 — 셀 경계를 넘어 날짜가 붙으면 안 된다
     text = ("<P>연결 포괄손익계산서 제 12 기 2025.01.01 부터 2025.12.31 까지 제 11 기 2024.01.01 부터 2024.12.31 까지</P>"
-            "<P>제12기 2025년 1월 1일부터 제11기 2024년 1월 1일부터 2025년 12월 31일까지 2024년 12월 31일까지</P>")
+            "<TR><TD>제12기 2025년 1월 1일부터</TD><TD>제11기 2024년 1월 1일부터</TD></TR>"
+            "<TR><TD>2025년 12월 31일까지</TD><TD>2024년 12월 31일까지</TD></TR>")
     path = tmp_path / "original.zip"
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(f"{RCEPT}.xml", text)
     assert fiscal_periods_from_filing(path) == {12: ("2025-01-01", "2025-12-31"), 11: ("2024-01-01", "2024-12-31")}
+
+
+def test_reversed_dates_are_dropped_but_long_periods_are_kept(tmp_path):
+    text = ("<P>제 12 기 2025.12.31 부터 2025.01.01 까지</P>"  # 역순 — 오류
+            "<P>제 11 기 2023.07.01 부터 2024.12.31 까지</P>")  # 18개월 — 결산기 변경일 수 있어 보존
+    path = tmp_path / "original.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(f"{RCEPT}.xml", text)
+    periods = fiscal_periods_from_filing(path)
+    assert 12 not in periods
+    assert periods[11] == ("2023-07-01", "2024-12-31")
+
+
+def test_long_period_is_preserved_and_marked_for_review():
+    rows = flatten([item()], periods={RCEPT: {12: ("2025-01-01", "2025-12-31"), 11: ("2023-07-01", "2024-12-31"), 10: ("2022-07-01", "2023-06-30")}})
+    prior = next(r for r in rows if r["source_column"] == "전기")
+    assert (prior["period_start"], prior["period_end"]) == ("2023-07-01", "2024-12-31")
+    assert prior["period_status"] == "review_needed:unusual_length"
+    assert prior["period_is_annual"] is False
 
 
 # ---------------------------------------------------------------- 행 식별

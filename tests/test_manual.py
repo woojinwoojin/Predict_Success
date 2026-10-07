@@ -1,0 +1,65 @@
+"""수기 확인표 규칙(docs/decisions.md D7) 테스트."""
+
+import pytest
+
+from src.normalization.manual import apply_confirmations, load_confirmations
+
+KEY = {"corp_code": "01009789", "fs_div": "CFS"}
+REVIEW = {"canonical_account": "interest_expense", "label": "이자비용", "status": "review_needed", "value": None, "note": "본문에 없음"}
+
+
+def entry(**kw):
+    base = {"confirmation_id": "C1", "corp_code": "01009789", "fs_div": "CFS", "canonical_account": "interest_expense",
+            "period_type": "duration", "period_start": "2025-01-01", "period_end": "2025-12-31", "value": "46,717,900", "unit": "천원",
+            "unit_multiplier": "1000", "rcept_no": "R2025", "source_location": "주석 29", "components": "", "status": "confirmed",
+            "extraction_method": "manual"}
+    return {**base, **kw}
+
+
+def test_confirmed_note_value_fills_review_and_converts_unit():
+    result = apply_confirmations(REVIEW, [entry()], KEY, "R2025", "2025-12-31")
+    assert result["status"] == "mapped"
+    assert result["value"] == "46717900000"  # 천원 × 1000 → 원
+    assert result["extraction_method"] == "manual"
+    assert "주석 29" in result["note"]
+
+
+def test_value_from_another_report_version_is_not_used():
+    result = apply_confirmations(REVIEW, [entry(rcept_no="R2025_OLD")], KEY, "R2025", "2025-12-31")
+    assert result["status"] == "review_needed"
+    assert "다른 보고서 버전" in result["note"]
+
+
+def test_unconfirmed_or_other_period_entries_are_ignored():
+    assert apply_confirmations(REVIEW, [entry(status="needs_review")], KEY, "R2025", "2025-12-31")["status"] == "review_needed"
+    assert apply_confirmations(REVIEW, [entry(period_end="2024-12-31")], KEY, "R2025", "2025-12-31")["status"] == "review_needed"
+
+
+def test_manual_value_that_disagrees_with_api_value_is_flagged():
+    mapped = {**REVIEW, "status": "mapped", "value": "1"}
+    result = apply_confirmations(mapped, [entry()], KEY, "R2025", "2025-12-31")
+    assert result["status"] == "review_needed"
+    assert "다름" in result["note"]
+
+
+def test_api_mapping_is_labelled_as_api_rule():
+    mapped = {**REVIEW, "status": "mapped", "value": "1"}
+    assert apply_confirmations(mapped, [], KEY, "R2025", "2025-12-31")["extraction_method"] == "api_rule"
+
+
+def write(tmp_path, rows):
+    path = tmp_path / "note_confirmations.csv"
+    header = list(entry().keys())
+    lines = [",".join(header)] + [",".join(f'"{r[h]}"' for h in header) for r in rows]
+    path.write_text("\n".join(lines), encoding="utf-8-sig")
+    return path
+
+
+def test_confirmed_entry_needs_a_source_location(tmp_path):
+    with pytest.raises(ValueError, match="원문 위치"):
+        load_confirmations(write(tmp_path, [entry(source_location="")]))
+
+
+def test_only_manual_extraction_method_is_accepted(tmp_path):
+    with pytest.raises(ValueError, match="manual"):
+        load_confirmations(write(tmp_path, [entry(extraction_method="api_rule")]))

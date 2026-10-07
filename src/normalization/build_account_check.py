@@ -15,6 +15,9 @@ import pandas as pd
 from src.normalization.account_map import load_rules, map_report, tag_rows
 from src.normalization.build_facts import INTERIM, RAW, ROOT, latest_valid_filing
 from src.normalization.dart_facts import build_facts, load_filings, mismatch_kind, same_period_mismatches
+from src.normalization.manual import apply_confirmations, load_confirmations
+
+MANUAL = ROOT / "data" / "manual"
 
 NAMES = {"01009789": "코스맥스", "00763473": "코스메카코리아", "01226410": "씨앤씨인터내셔널", "00160621": "한국화장품제조", "00939331": "한국콜마"}
 STATUS_KO = {"mapped": "성공", "review_needed": "확인", "no_data": "자료없음", "empty_value": "값없음", "held": "보류"}
@@ -28,6 +31,10 @@ def main(as_of: str) -> None:
     for r in rows:
         if r["source_column"] == "당기":
             by_snapshot.setdefault(r["snapshot_id"], []).append(r)
+    # 보고서 당기의 종료일 (수기 확인값·불일치 검토를 같은 기간에 연결할 때 쓴다)
+    current_end = {sid: Counter(r["period_end"] for r in rs if r["period_end"]).most_common(1)[0][0] for sid, rs in by_snapshot.items()}
+    confirmations = load_confirmations(MANUAL / "note_confirmations.csv")
+    reviews = pd.read_csv(MANUAL / "mismatch_reviews.csv", dtype=str, encoding="utf-8-sig") if (MANUAL / "mismatch_reviews.csv").exists() else pd.DataFrame()
 
     results, evidence_rows = [], []
     for s in snaps:
@@ -42,8 +49,14 @@ def main(as_of: str) -> None:
                          "note": f"기준일 {as_of}의 선택 보고서 {selected} ≠ API 값의 보고서 {s['rcept_nos']}", "snapshot_id": s["snapshot_id"]}
                         for n, spec in config["accounts"].items()]
             continue
+        end = current_end.get(s["snapshot_id"])
         for m in map_report(by_snapshot.get(s["snapshot_id"], []), config):
-            results.append({**key, **{k: v for k, v in m.items() if k != "evidence"}, "rcept_no": selected, "snapshot_id": s["snapshot_id"]})
+            m = apply_confirmations(m, confirmations, key, selected, end)
+            linked = reviews[(reviews.corp_code == s["corp_code"]) & (reviews.fs_div == s["fs_div"]) & (reviews.period_end == end)
+                             & (reviews.canonical_account == m["canonical_account"])] if len(reviews) else []
+            review_note = "; ".join(f"불일치 검토 {r.review_id}: {r.cause}" for r in linked.itertuples()) if len(linked) else ""
+            results.append({**key, **{k: v for k, v in m.items() if k != "evidence"}, "period_end": end, "mismatch_review": review_note,
+                            "rcept_no": selected, "snapshot_id": s["snapshot_id"]})
             evidence_rows += [{**key, "canonical_account": m["canonical_account"], **e} for e in m["evidence"]]
 
     check = pd.DataFrame(results)
@@ -58,7 +71,10 @@ def main(as_of: str) -> None:
             lambda s: "/".join(f"{STATUS_KO[k]}{v}" for k, v in Counter(s).most_common())).unstack()[labels]
         print(f"[{'연결' if fs == 'CFS' else '별도'}]")
         print(table.to_string(), "\n")
-    print("상태 합계:", dict(Counter(check["status"])))
+    print("상태 합계:", dict(Counter(check["status"])), "| 수기 확인 사용:", int((check.get("extraction_method") == "manual").sum()))
+    flagged = check[check["mismatch_review"].fillna("") != ""] if "mismatch_review" in check else check.iloc[0:0]
+    for r in flagged.itertuples():
+        print(f"  [불일치 검토 연결] {r.company} {r.fs_div} {r.bsns_year} {r.label}: {r.mismatch_review}")
     print("\n[확인 필요 사유]")
     rv = check[check.status == "review_needed"]
     for (label, note), g in rv.groupby(["label", "note"]):

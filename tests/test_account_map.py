@@ -2,10 +2,8 @@
 
 from pathlib import Path
 
-import pytest
-
 from src.normalization.account_map import load_rules, map_account, map_report
-from src.normalization.dart_facts import is_annual_period, is_plausible_fiscal_period
+from src.normalization.dart_facts import is_annual_period, is_reversed_period, is_unusually_long
 
 CONFIG = load_rules(Path(__file__).resolve().parents[1] / "configs" / "account_map_v1.yaml")
 NONSTD = "-표준계정코드 미사용-"
@@ -89,14 +87,39 @@ def test_empty_source_value_is_reported_as_empty_not_zero():
 # ---------------------------------------------------------------- 단기 이자부채 (구성 항목의 합)
 
 
-def test_short_term_debt_sums_explicit_current_components():
+def test_short_term_debt_includes_current_lease_liabilities():
     result = account("short_term_interest_bearing_debt", [
         row("BS", "ifrs-full_ShorttermBorrowings", "단기차입금", "100"),
         row("BS", NONSTD, "유동성장기부채", "30"),
-        row("BS", "ifrs-full_CurrentLeaseLiabilities", "리스부채(유동)", "7"),  # 정책 미정 — 합계 제외
+        row("BS", "ifrs-full_CurrentLeaseLiabilities", "리스부채(유동)", "7"),
+        row("BS", "ifrs-full_NoncurrentLeaseLiabilities", "리스부채(비유동)", "50"),  # 비유동은 넣지 않는다
     ])
-    assert (result["status"], result["value"]) == ("mapped", "130")
-    assert "정책 미정" in result["note"]
+    assert (result["status"], result["value"]) == ("mapped", "137")
+    assert result["basis"] == "리스 포함"
+
+
+def test_total_and_its_components_together_are_not_double_counted():
+    result = account("short_term_interest_bearing_debt", [
+        row("BS", "ifrs-full_CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived", "유동차입금", "130"),
+        row("BS", "ifrs-full_ShorttermBorrowings", "단기차입금", "100"),
+    ])
+    assert result["status"] == "review_needed"
+    assert "중복" in result["note"]
+
+
+def test_bond_code_without_current_split_is_a_review_candidate():
+    result = account("short_term_interest_bearing_debt", [
+        row("BS", "ifrs-full_ShorttermBorrowings", "차입금", "100"),
+        row("BS", "ifrs-full_BondsIssued", "사채", "2398"),  # 한국콜마 2023: 유동 사채가 구분 없는 코드로 옴
+    ])
+    assert result["status"] == "review_needed"
+
+
+def test_interest_paid_is_never_used_as_interest_expense():
+    result = account("interest_expense", [row("CF", "ifrs-full_InterestPaidClassifiedAsOperatingActivities", "이자의 지급", "-40")])
+    assert result["status"] == "review_needed"
+    assert result["value"] is None
+    assert "대체 금지" in result["note"]
 
 
 def test_short_term_debt_is_not_summed_when_an_ambiguous_item_exists():
@@ -117,13 +140,16 @@ def test_map_report_covers_every_required_account():
 # ---------------------------------------------------------------- 기간 규칙 분리
 
 
-def test_short_fiscal_period_is_accepted_but_marked_non_annual():
-    assert is_plausible_fiscal_period("2025-07-01", "2025-12-31")  # 결산기 변경 등 짧은 기간은 정상
-    assert not is_annual_period("2025-07-01", "2025-12-31")
-    assert is_annual_period("2024-01-01", "2024-12-31")
-    assert is_annual_period("2024-03-01", "2025-02-28")
+def test_annual_flag_uses_report_type_and_actual_period():
+    assert is_annual_period("2024-01-01", "2024-12-31", "11011")
+    assert is_annual_period("2024-03-01", "2025-02-28", "11011")
+    assert is_annual_period("2024-01-01", "2024-12-29", "11011")  # 52주(364일) 보고기간
+    assert not is_annual_period("2025-07-01", "2025-12-31", "11011")  # 결산기 변경 등 짧은 기간 — 받아들이되 연간 아님
+    assert not is_annual_period("2024-01-01", "2024-12-31", "11012")  # 반기보고서
 
 
-@pytest.mark.parametrize("start, end", [("2024-01-01", "2025-12-31"), ("2025-01-01", "2024-12-31")])
-def test_misattached_dates_are_rejected(start, end):
-    assert not is_plausible_fiscal_period(start, end)
+def test_only_reversed_dates_are_errors():
+    assert is_reversed_period("2025-01-01", "2024-12-31")
+    assert not is_reversed_period("2023-07-01", "2024-12-31")
+    assert is_unusually_long("2023-07-01", "2024-12-31")  # 버리지 않고 확인 필요로
+    assert not is_unusually_long("2024-01-01", "2024-12-31")

@@ -47,7 +47,7 @@ def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
     reviews = matching(rows, spec.get("review", []), config)
     forbidden = matching(rows, spec.get("forbidden", []), config)
     pending = matching(rows, spec.get("policy_pending", []), config)
-    base = {"canonical_account": name, "label": spec["label"]}
+    base = {"canonical_account": name, "label": spec["label"], "basis": spec.get("basis", "")}
     notes = []
     if forbidden:
         notes.append("대체 금지 항목 있음: " + ", ".join(sorted({r["account_nm"] for r, _ in forbidden})))
@@ -56,6 +56,11 @@ def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
     ev = evidence(found, "match") + evidence(reviews, "review") + evidence(forbidden, "forbidden") + evidence(pending, "policy_pending")
 
     if spec.get("composite"):
+        ids = {r["account_id"] for r, _ in found}
+        overlapping = [(total, parts) for total, parts in spec.get("overlaps", []) if total in ids and ids & set(parts)]
+        if overlapping:
+            return {**base, "status": "review_needed", "value": None, "evidence": ev,
+                    "note": "; ".join([f"합계 항목과 구성 항목이 함께 있어 중복 가능: {total} ⊃ {sorted(ids & set(parts))}" for total, parts in overlapping] + notes)}
         if reviews:
             return {**base, "status": "review_needed", "value": None, "evidence": ev,
                     "note": "; ".join(["확인 필요 후보: " + ", ".join(sorted({r["account_nm"] for r, _ in reviews}))] + notes)}

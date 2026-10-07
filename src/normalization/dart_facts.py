@@ -48,41 +48,59 @@ def _iso(y, m, d) -> str:
     return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
 
 
-def is_plausible_fiscal_period(start: str, end: str) -> bool:
-    """잘못 붙은 날짜를 막는 규칙. 당기·전기 열이 나란히 있는 표를 평문으로 펴면
-    "제12기 2024년 1월 1일부터 2025년 12월 31일까지"처럼 다른 열의 날짜가 이어 붙는다.
-    역순이거나 1년을 넘는 매치만 버린다(국내 사업연도는 1년을 넘을 수 없다: 상법·법인세법).
-    1년보다 짧은 기간(결산기 변경 등)은 정상으로 받아들인다 — 연간 여부는 is_annual_period로 따로 표시한다."""
-    s, e = date.fromisoformat(start), date.fromisoformat(end)
-    try:
-        one_year_later = s.replace(year=s.year + 1)
-    except ValueError:  # 2월 29일 시작
-        one_year_later = date(s.year + 1, 3, 1)
-    return s <= e < one_year_later
+CELL_BREAK = " ‖ "  # 표 셀 경계. 공백이 아니라서 정규식의 \s가 넘지 못한다
+ANNUAL_REPORT_CODE = "11011"  # 사업보고서
+MAX_REGULAR_DAYS = 371  # 53주 보고기간까지는 정상 연간 범위
 
 
-def is_annual_period(start: str, end: str) -> bool:
-    """정상적인 12개월 기간인지. 짧은 기간을 막지는 않고, 기간 비교 지표에서 주의하도록 표시만 한다."""
-    s, e = date.fromisoformat(start), date.fromisoformat(end)
-    try:
-        return (e - s).days + 1 in (365, 366) and e == s.replace(year=s.year + 1) - timedelta(days=1)
-    except ValueError:
+def period_days(start: str, end: str) -> int:
+    return (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+
+
+def is_reversed_period(start: str, end: str) -> bool:
+    """종료일이 시작일보다 빠르면 날짜 오류. 이것만 버린다."""
+    return date.fromisoformat(end) < date.fromisoformat(start)
+
+
+def is_unusually_long(start: str, end: str) -> bool:
+    """53주를 넘는 기간. 결산기 변경 등으로 정상일 수도 있어 버리지 않고 확인 필요로 남긴다 (IAS 1)."""
+    return period_days(start, end) > MAX_REGULAR_DAYS
+
+
+def is_annual_period(start: str, end: str, reprt_code: str) -> bool:
+    """연간 값인지: 보고서 성격(사업보고서)과 실제 회계기간(12개월 또는 52·53주)을 함께 본다.
+    짧거나 긴 기간을 막지 않고, 기간 비교 지표에서 주의하도록 표시만 한다."""
+    if reprt_code != ANNUAL_REPORT_CODE:
         return False
+    s, e = date.fromisoformat(start), date.fromisoformat(end)
+    try:
+        twelve_months = e == s.replace(year=s.year + 1) - timedelta(days=1)
+    except ValueError:  # 2월 29일 시작
+        twelve_months = False
+    return twelve_months or 364 <= period_days(start, end) <= MAX_REGULAR_DAYS
+
+
+def filing_text(raw: str) -> str:
+    """원문 XML → 평문. 표 셀 경계는 CELL_BREAK로 남겨, 옆 열의 날짜가 이어 붙지 않게 한다."""
+    text = re.sub(r"</(TD|TH|TE|TU)>", CELL_BREAK, raw, flags=re.IGNORECASE)
+    return html.unescape(re.sub(r"<[^>]+>", " ", text))
 
 
 def fiscal_periods_from_filing(zip_path: Path) -> dict[int, tuple[str, str] | None]:
     """원문에 적힌 "제 N 기 YYYY.MM.DD 부터 YYYY.MM.DD 까지"로 기수 → (시작일, 종료일)을 만든다.
 
-    같은 기수에 서로 다른 (그럴듯한) 기간이 적혀 있으면 None (확인 필요).
+    - 매치는 표 셀 경계를 넘지 못한다 (당기·전기 열이 나란히 있는 표에서 다른 열의 날짜가 붙는 것을 막는다)
+    - 역순 날짜는 오류로 버린다. 길이로는 버리지 않는다
+    - 같은 기수에 서로 다른 기간이 적혀 있으면 None (확인 필요)
     """
     found: dict[int, set] = {}
     with zipfile.ZipFile(zip_path) as z:
         for name in z.namelist():
-            text = html.unescape(re.sub(r"<[^>]+>", " ", z.read(name).decode("utf-8", errors="replace")))
+            text = filing_text(z.read(name).decode("utf-8", errors="replace"))
             for m in FISCAL_PERIOD.finditer(text):
                 try:
                     period = (_iso(m[2], m[3], m[4]), _iso(m[5], m[6], m[7]))
-                    if not is_plausible_fiscal_period(*period):
+                    if is_reversed_period(*period):
                         continue
                 except ValueError:  # 존재하지 않는 날짜
                     continue
@@ -137,7 +155,8 @@ def flatten_snapshot(snapshot_id: str, response: dict, meta: dict, filings: dict
                 period_start, period_end = period
                 if period_type == "instant":
                     period_start = None
-                period_status = "from_filing_text"
+                # 날짜는 보존하고, 53주를 넘는 기간만 확인 필요로 표시한다
+                period_status = "review_needed:unusual_length" if is_unusually_long(*period) else "from_filing_text"
             rows.append({
                 "row_id": f"{snapshot_id}#{index}#{column}",
                 "snapshot_id": snapshot_id, "row_index": index, "ord": item.get("ord"),
@@ -150,7 +169,7 @@ def flatten_snapshot(snapshot_id: str, response: dict, meta: dict, filings: dict
                 "raw_amount": item[column], "value": None if value is None else str(value), "value_status": value_status,
                 "currency": item.get("currency"), "unit": UNIT, "unit_multiplier": UNIT_MULTIPLIER,
                 "period_type": period_type, "period_start": period_start, "period_end": period_end, "period_status": period_status,
-                "period_is_annual": None if period is None or period_type is None else is_annual_period(*period),
+                "period_is_annual": None if period is None or period_type is None else is_annual_period(*period, request["reprt_code"]),
                 "rcept_no": rcept_no, "rcept_dt": filing.get("rcept_dt"), "report_nm": filing.get("report_nm"),
                 "filing_link": filing["link"], "collected_at": meta["collected_at"],
             })
