@@ -8,21 +8,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.normalization.dart_facts import NON_BODY_CORRECTIONS, build_facts, load_filings, mismatch_kind, same_period_mismatches
+from src.normalization.dart_facts import build_facts, load_filings, mismatch_kind, same_period_mismatches
+from src.normalization.selection import load_published_filings, select_snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw" / "dart"
 INTERIM = ROOT / "data" / "interim"
-
-
-def latest_valid_filing(filings: dict, corp_code: str, bsns_year: int, as_of: str) -> str | None:
-    """기준일(YYYYMMDD) 이전에 공개된 해당 사업연도 보고서 중 최신 유효 정정본의 접수번호."""
-    candidates = [
-        f for f in filings.values()
-        if f["link"] == "stored" and f.get("corp_code") == corp_code and f.get("bsns_year") == bsns_year
-        and f["rcept_dt"] <= as_of and f.get("correction") not in NON_BODY_CORRECTIONS
-    ]
-    return max(candidates, key=lambda f: (f["rcept_dt"], f["rcept_no"]))["rcept_no"] if candidates else None
 
 
 def main(as_of: str | None = None) -> None:
@@ -44,15 +35,13 @@ def main(as_of: str | None = None) -> None:
     print("[원문 연결]", dict(Counter(facts["filing_link"])))
 
     filings = load_filings(RAW)
+    published = load_published_filings(RAW)
     as_of = as_of or pd.Timestamp.today().strftime("%Y%m%d")
     link = Counter()
-    for s in snaps:
-        if s["status"] != "000":
-            link["자료 없음"] += 1
-            continue
-        selected = latest_valid_filing(filings, s["corp_code"], int(s["bsns_year"]), as_of)
-        link["최신 유효 정정본과 같음" if s["rcept_nos"] == [selected] else f"다름 (선택 {selected}, API {s['rcept_nos']})"] += 1
-    print(f"[API 값 ↔ 기준일 {as_of}의 최신 유효 정정본]", dict(link))
+    for corp, fs, year in sorted({(s["corp_code"], s["fs_div"], int(s["bsns_year"])) for s in snaps}):
+        sel = select_snapshot(snaps, published, filings, corp, fs, year, as_of)
+        link[{"selected": "최신 유효 보고서와 연결된 스냅샷 선택", "no_data": "자료 없음"}.get(sel.status, f"보류: {sel.note}")] += 1
+    print(f"[분석 입력 선택 — 기준일 {as_of}]", dict(link))
 
     result = same_period_mismatches(rows)
     records = []

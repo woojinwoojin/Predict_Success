@@ -110,6 +110,7 @@ accounts:
     # 단기 이자부채 = 단기차입금 + 유동성 장기차입금·사채 + 유동 리스부채 + 그 밖에 확인된 유동성 이자부채(수기 확인표)
     # 합산 항목은 서로 겹치지 않아야 한다. 리스는 재무상태표의 유동 장부금액(미래 지급액 총액이 아님).
     composite: true  # 하나라도 확인 필요면 합계를 내지 않는다
+    requires_completeness: true  # 찾은 구성 항목 합계는 후보값. 완전성 확인(수기 component_check = 확인)이 있어야 정상 (D11)
     match:
       - {statement: balance, account_id: ifrs-full_ShorttermBorrowings}
       - {statement: balance, account_id: ifrs-full_CurrentPortionOfLongtermBorrowings}

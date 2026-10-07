@@ -15,6 +15,9 @@ STATUS_RANK = {"normal": 0, "reference": 1, "not_computed": 2}
 INPUT_TO_CALC = {"mapped": "normal", "candidate": "reference"}
 
 
+PERIOD_OK = {"from_filing_text", "from_manual"}
+
+
 @dataclass
 class Input:
     label: str
@@ -23,9 +26,28 @@ class Input:
     value: Decimal | None
     source: str  # 접수번호·추출 방법
     note: str = ""
+    period_type: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    period_status: str | None = None
+    period_is_annual: bool | None = None
+
+    def period_problem(self) -> str | None:
+        """값이 있는 입력의 기간 조건 (D11 ⑥): 기간 확인, 요청 연도와 일치, 흐름 값은 연간."""
+        if self.status not in INPUT_TO_CALC:
+            return None
+        if self.period_status not in PERIOD_OK or not self.period_end:
+            return f"기간 미확인 ({self.period_status})"
+        if int(self.period_end[:4]) != self.year:
+            return f"기간 종료일 {self.period_end}이 {self.year} 사업연도와 다름"
+        if self.period_type == "duration" and self.period_is_annual is not True:
+            return f"연간 기간 아님 ({self.period_start}~{self.period_end}) — 연간 비율·성장률에 쓰지 않음"
+        return None
 
     @property
     def calc_status(self) -> str:
+        if self.period_problem():
+            return "not_computed"
         return INPUT_TO_CALC.get(self.status, "not_computed")
 
     def describe(self) -> str:
@@ -53,12 +75,23 @@ def combine(result: Result, inputs: list[Input]) -> Result:
     worst = max((i.calc_status for i in inputs), key=STATUS_RANK.get, default="normal")
     result.calc_status = worst
     for i in inputs:
-        if i.calc_status == "reference":
+        if i.period_problem():
+            result.hold_reasons.append(f"{i.label} {i.year}: {i.period_problem()}")
+        elif i.calc_status == "reference":
             result.hold_reasons.append(f"{i.label} {i.year}: 후보값 — {i.note[:60]}")
         elif i.calc_status == "not_computed":
             result.hold_reasons.append(f"{i.label} {i.year}: {i.status} — {i.note[:60]}")
     if worst != "normal":
         result.score_eligible = "보류"
+    return result
+
+
+def finalize(result: Result) -> Result:
+    """상태 일관성 (D11 ⑦): 정상 계산이 아니면 점수 반영 가능으로 남지 않는다."""
+    if result.calc_status != "normal" and (result.score_eligible == "가능" or result.score_eligible.startswith("검증용")):
+        result.score_eligible = "보류"
+    if result.value is None and result.calc_status == "normal":
+        result.calc_status, result.score_eligible = "not_computed", "보류"
     return result
 
 
@@ -122,13 +155,14 @@ def current_ratios(get) -> list[Result]:
         r = combine(Result(metric, label, "2025말"), [ca, cl])
         if r.calc_status != "not_computed":
             if cl.value == 0:
-                r.calc_status = "not_computed"
-                r.hold_reasons.append("유동부채 0 — 무한대 처리 금지, 점수 단계에서 상한 적용")
+                # 비율 계산 불가. 조건부 점수(README 7.1 C)는 아직 구현하지 않았으므로 점수도 보류
+                r.calc_status, r.score_eligible = "not_computed", "보류 — 비율 계산 불가 (조건부 점수 미구현)"
+                r.hold_reasons.append("유동부채 0 — 무한대 처리 금지")
             else:
                 r.value = ratio(ca.value, cl.value)
         if r.calc_status == "normal":
             r.score_eligible = eligible_if_normal
-        out.append(r)
+        out.append(finalize(r))
     return out
 
 

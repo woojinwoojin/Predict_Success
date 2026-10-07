@@ -48,6 +48,24 @@ def evidence(pairs: list[tuple[dict, dict]], kind: str) -> list[dict]:
             for r, rule in pairs]
 
 
+PERIOD_FIELDS = ("period_type", "period_start", "period_end", "period_status", "period_is_annual")
+PERIOD_OK = {"from_filing_text", "from_manual"}
+
+
+def period_of(rows: list[dict]) -> tuple[dict, str | None]:
+    """매핑에 쓴 행들의 기간. 확인되지 않았거나 행끼리 다르면 사유를 돌려준다 (D11 ⑥)."""
+    if not rows:
+        return {k: None for k in PERIOD_FIELDS}, None
+    periods = {tuple(r.get(k) for k in PERIOD_FIELDS) for r in rows}
+    period = dict(zip(PERIOD_FIELDS, next(iter(periods))))
+    bad = [r for r in rows if r.get("period_status") not in PERIOD_OK]
+    if bad:
+        return period, "기간 미확인: " + ", ".join(f"{r['account_nm']} ({r.get('period_status')})" for r in bad)
+    if len(periods) > 1:
+        return period, "구성 항목의 기간이 서로 다름"
+    return period, None
+
+
 def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
     """한 보고서(당기 열)의 행들에서 내부 계정 하나를 찾는다."""
     found = matching(rows, spec.get("match", []), config)
@@ -77,14 +95,24 @@ def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
         if any(r["value_status"] != "parsed" for r, _ in found):
             return {**base, "status": "review_needed", "value": None, "evidence": ev,
                     "note": "; ".join(["구성 항목 중 값 없음·변환 실패"] + notes)}
+        period, period_problem = period_of([r for r, _ in found])
+        if period_problem:
+            return {**base, **period, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join([period_problem] + notes)}
         total = sum(Decimal(r["value"]) for r, _ in found)
-        return {**base, "status": "mapped", "value": str(total), "evidence": ev,
-                "note": "; ".join([f"구성 {len(found)}개: " + ", ".join(r["account_nm"] for r, _ in found)] + notes)}
+        # 찾은 구성 항목의 합계일 뿐 완전성은 확인되지 않았다 — 묶음 행(기타유동부채 등) 안의 이자부채를 API 규칙은 모른다.
+        # 완전성이 확인된 합계(수기 확인표 component_check = 확인)만 정상값이 된다 (D11 ⑤)
+        status = "candidate" if spec.get("requires_completeness") else "mapped"
+        return {**base, **period, "status": status, "value": str(total), "evidence": ev,
+                "note": "; ".join([f"찾은 구성 항목 합계 {len(found)}개: " + ", ".join(r["account_nm"] for r, _ in found)
+                                   + (" — 완전성 미확인" if status == "candidate" else "")] + notes)}
 
     if len(found) == 1:
         row = found[0][0]
+        period, period_problem = period_of([row])
+        if period_problem and row["value_status"] == "parsed":
+            return {**base, **period, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join([period_problem] + notes)}
         status = {"parsed": "mapped", "empty_in_source": "empty_value"}.get(row["value_status"], "review_needed")
-        return {**base, "status": status, "value": row["value"], "evidence": ev, "note": "; ".join(notes)}
+        return {**base, **period, "status": status, "value": row["value"], "evidence": ev, "note": "; ".join(notes)}
     if len(found) > 1:
         return {**base, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join([f"후보 {len(found)}개 — 자동 선택하지 않음"] + notes)}
     if reviews:

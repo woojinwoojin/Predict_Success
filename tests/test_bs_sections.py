@@ -13,7 +13,8 @@ NONSTD = "-표준계정코드 미사용-"
 def bs(ord_, account_id, nm, value, snapshot="s", column="당기"):
     return {"row_id": f"{snapshot}#{ord_}#{column}", "snapshot_id": snapshot, "source_column": column, "sj_div": "BS", "ord": str(ord_),
             "account_id": account_id, "account_nm": nm, "account_detail": "-", "raw_amount": value,
-            "value": value if value != "" else None, "value_status": "parsed" if value != "" else "empty_in_source"}
+            "value": value if value != "" else None, "value_status": "parsed" if value != "" else "empty_in_source",
+            "period_type": "instant", "period_start": None, "period_end": "2025-12-31", "period_status": "from_filing_text", "period_is_annual": None}
 
 
 def balance_sheet(cl_items, ncl_items, ca_items=(("ifrs-full_Inventories", "재고자산", "100"),), hfs_in_ca=None, hfs_after=None):
@@ -99,7 +100,7 @@ def test_bond_in_sum_matched_current_section_is_not_auto_summed():
 
 def test_noncurrent_bond_is_not_a_short_term_debt_candidate():
     rows = balance_sheet(cl_items=[("ifrs-full_ShorttermBorrowings", "단기차입금", "60")], ncl_items=[("ifrs-full_BondsIssued", "사채", "300")])
-    assert (debt(rows)["status"], debt(rows)["value"]) == ("mapped", "60")
+    assert (debt(rows)["status"], debt(rows)["value"]) == ("candidate", "60")  # 비유동 사채는 후보에도 없음, 합계는 완전성 미확인
 
 
 def test_bond_with_unconfirmed_section_is_a_review_candidate():
@@ -136,3 +137,31 @@ def test_negative_held_for_sale_balance_is_not_adjusted():
 def test_no_held_for_sale_means_reported_equals_adjusted():
     adj = held_for_sale_adjustment(balance_sheet(cl_items=[], ncl_items=[]), "assets")
     assert (adj["included"], adj["adjusted"]) == ("해당 없음", "100")
+
+
+# ---------------------------------------------------------------- 결측 (검토 지적 ④)
+
+
+def test_held_for_sale_row_with_missing_amount_is_not_treated_as_zero():
+    rows = balance_sheet(cl_items=[], ncl_items=[], hfs_after="20")
+    hfs = next(r for r in rows if r["account_nm"] == "매각예정자산")
+    hfs.update(value=None, raw_amount="", value_status="empty_in_source")
+    adj = held_for_sale_adjustment(rows, "assets")
+    assert adj["included"] == "확인 필요"
+    assert adj["adjusted"] is None
+
+
+def test_confirmed_zero_and_missing_row_are_both_not_applicable_but_described_differently():
+    rows = balance_sheet(cl_items=[], ncl_items=[], hfs_after="0")
+    assert (held_for_sale_adjustment(rows, "assets")["included"], held_for_sale_adjustment(rows, "assets")["evidence"]) == ("해당 없음", "매각예정 금액 0 (원문 숫자 0)")
+    rows = balance_sheet(cl_items=[], ncl_items=[])
+    assert held_for_sale_adjustment(rows, "assets")["evidence"] == "매각예정 행 없음"
+
+
+def test_section_with_unparsed_member_is_not_sum_verified():
+    rows = balance_sheet(cl_items=[("ifrs-full_ShorttermBorrowings", "단기차입금", "60"), ("ifrs-full_CurrentTaxLiabilities", "당기법인세부채", "40")], ncl_items=[])
+    for r in rows:
+        r.pop("bs_section"); r.pop("bs_section_sum_ok")
+    next(r for r in rows if r["account_nm"] == "당기법인세부채").update(value=None, raw_amount="-", value_status="empty_in_source")
+    annotate_sections(rows)
+    assert find(rows, "단기차입금")["bs_section_sum_ok"] is False

@@ -3,7 +3,9 @@
 import io
 import zipfile
 
-from src.normalization.build_facts import latest_valid_filing
+import pytest
+
+from src.normalization.selection import latest_valid_filing, select_snapshot
 from src.normalization.dart_facts import (
     fiscal_periods_from_filing, flatten_snapshot, mismatch_kind, parse_amount,
     same_period_mismatches,
@@ -155,13 +157,45 @@ def test_different_values_are_flagged_with_kind_not_called_restatement():
 # ---------------------------------------------------------------- 값 선택용 보고서 버전
 
 
+PUBLISHED = {
+    "a": {"rcept_no": "a", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20250320", "correction": None},
+    "b": {"rcept_no": "b", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20250814", "correction": "기재정정"},
+    "c": {"rcept_no": "c", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20260813", "correction": "기재정정"},
+    "d": {"rcept_no": "d", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20260901", "correction": "첨부정정"},
+}
+
+
 def test_latest_valid_filing_respects_as_of_and_skips_attachment_corrections():
-    filings = {
-        "a": {"link": "stored", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20250320", "rcept_no": "a", "correction": None},
-        "b": {"link": "stored", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20250814", "rcept_no": "b", "correction": "기재정정"},
-        "c": {"link": "stored", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20260813", "rcept_no": "c", "correction": "기재정정"},
-        "d": {"link": "stored", "corp_code": "c", "bsns_year": 2024, "rcept_dt": "20260901", "rcept_no": "d", "correction": "첨부정정"},
-    }
-    assert latest_valid_filing(filings, "c", 2024, "20261007") == "c"  # 첨부정정(d)은 제외
-    assert latest_valid_filing(filings, "c", 2024, "20260630") == "b"  # 기준일 이후 정정(c)은 모른다
-    assert latest_valid_filing(filings, "c", 2024, "20250101") is None  # 아직 공개 전 → 보류
+    assert latest_valid_filing(PUBLISHED, "c", 2024, "20261007") == "c"  # 첨부정정(d)은 제외
+    assert latest_valid_filing(PUBLISHED, "c", 2024, "20260630") == "b"  # 기준일 이후 정정(c)은 모른다
+    assert latest_valid_filing(PUBLISHED, "c", 2024, "20250101") is None  # 아직 공개 전 → 보류
+
+
+def snap(run, rcept, status="000"):
+    return {"snapshot_id": f"c/api/fnlttSinglAcntAll/2024/11011/CFS/{run}", "corp_code": "c", "fs_div": "CFS", "bsns_year": "2024",
+            "status": status, "rcept_nos": [rcept] if status == "000" else []}
+
+
+def test_unstored_latest_filing_is_held_not_replaced_by_older_one():
+    # 검토 지적 ③: 최신 기재정정본(c) 원문을 못 받았으면 이전 저장본(b)으로 내려가지 않는다
+    filings = {"a": {"link": "stored"}, "b": {"link": "stored"}, "c": {"link": "attempt_only"}}
+    sel = select_snapshot([snap("run1", "b")], PUBLISHED, filings, "c", "CFS", 2024, "20261007")
+    assert (sel.status, sel.rcept_no) == ("held", "c")
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_snapshot_choice_does_not_depend_on_row_order(order):
+    # 검토 지적 ②: 과거 버전 스냅샷과 최신 버전 스냅샷이 섞여 있어도 선택 결과는 같아야 한다
+    filings = {k: {"link": "stored"} for k in "abc"}
+    snaps = [snap("20250901T000000Z", "b"), snap("20261001T000000Z", "c")]
+    if order:
+        snaps.reverse()
+    sel = select_snapshot(snaps, PUBLISHED, filings, "c", "CFS", 2024, "20261007")
+    assert (sel.status, sel.snapshot_id.rsplit("/", 1)[-1]) == ("selected", "20261001T000000Z")
+
+
+def test_repeated_collection_of_same_report_uses_latest_run():
+    filings = {"c": {"link": "stored"}}
+    snaps = [snap("20261001T000000Z", "c"), snap("20261005T000000Z", "c")]
+    sel = select_snapshot(list(reversed(snaps)), PUBLISHED, filings, "c", "CFS", 2024, "20261007")
+    assert sel.snapshot_id.endswith("20261005T000000Z")

@@ -9,7 +9,7 @@ from decimal import Decimal
 import pandas as pd
 import yaml
 
-from src.metrics.engine import OWN_METRICS, Input, peer_relative
+from src.metrics.engine import OWN_METRICS, Input, finalize, peer_relative
 from src.normalization.build_facts import INTERIM, ROOT
 
 BASIS_KO = {"CFS": "연결", "OFS": "별도"}
@@ -23,9 +23,14 @@ def make_getter(check: pd.DataFrame, corp: str, fs: str):
         row = sub[(sub.canonical_account == account) & (sub.bsns_year == str(year))]
         if row.empty:
             return Input(account, year, "missing", None, "", "점검표에 없음")
+        if len(row) > 1:  # 분석 입력 키는 유일해야 한다 — 행 순서로 고르지 않는다 (D11 ②)
+            raise ValueError(f"계산 입력 중복: {corp} {fs} {year} {account} ({len(row)}행)")
         r = row.iloc[0]
         value = Decimal(r["value"]) if r["value"] not in ("", None) and r["status"] in ("mapped", "candidate") else None
-        return Input(r["label"], year, r["status"], value, f"{r['rcept_no']} {r['extraction_method'] or ''}".strip(), r["note"] or "")
+        annual = {"True": True, "False": False}.get(str(r.get("period_is_annual", "")))
+        return Input(r["label"], year, r["status"], value, f"{r['rcept_no']} {r['extraction_method'] or ''}".strip(), r["note"] or "",
+                     r.get("period_type") or None, r.get("period_start") or None, r.get("period_end") or None,
+                     r.get("period_status") or None, annual)
     return get
 
 
@@ -56,7 +61,7 @@ def main() -> None:
 
     rows = []
     for corp, spec in basis["companies"].items():
-        for r in list(own[corp].values()) + peer[corp]:
+        for r in [finalize(x) for x in list(own[corp].values()) + peer[corp]]:
             years = range(2023, 2026) if r.metric in ("revenue_cagr_3y", "growth_volatility", "growth_gap") else range(2025, 2026)
             note = scope_note(scope, corp, spec["basis"], years) if spec["basis"] == "CFS" else ""
             rows.append({

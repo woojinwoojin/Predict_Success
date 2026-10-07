@@ -5,18 +5,25 @@ from decimal import Decimal
 import pytest
 
 from src.metrics.engine import (
-    Input, current_ratios, interest_coverage, midrank_percentile, ocf_to_avg_assets, operating_margin, peer_relative,
+    Input, Result, current_ratios, finalize, interest_coverage, midrank_percentile, ocf_to_avg_assets, operating_margin, peer_relative,
     revenue_cagr_3y, growth_volatility,
 )
 
 
-def getter(values: dict, statuses: dict | None = None):
-    statuses = statuses or {}
+FLOWS = {"revenue", "cost_of_sales", "operating_income", "net_income", "operating_cash_flow", "interest_expense"}
+
+
+def getter(values: dict, statuses: dict | None = None, periods: dict | None = None):
+    statuses, periods = statuses or {}, periods or {}
 
     def get(account, year):
         status = statuses.get((account, year), "mapped" if (account, year) in values else "review_needed")
         v = values.get((account, year))
-        return Input(account, year, status, None if v is None else Decimal(str(v)), "test", "note")
+        flow = account in FLOWS
+        period = dict(period_type="duration" if flow else "instant", period_start=f"{year}-01-01" if flow else None,
+                      period_end=f"{year}-12-31", period_status="from_filing_text", period_is_annual=True if flow else None)
+        period.update(periods.get((account, year), {}))
+        return Input(account, year, status, None if v is None else Decimal(str(v)), "test", "note", **period)
     return get
 
 
@@ -99,3 +106,52 @@ def test_excluded_company_gets_no_peer_score_not_zero():
 def test_midrank_percentile_matches_readme_formula():
     assert midrank_percentile(2, [1, 2, 3]) == pytest.approx(100 * (1 + 0.5) / 3)
     assert midrank_percentile(2, [1, 2, 3], higher_is_better=False) == pytest.approx(100 - 50)
+
+
+# ---------------------------------------------------------------- 검토 지적 ⑥ ⑦ ②
+
+
+def test_short_fiscal_period_does_not_enter_cagr():
+    get = getter({("revenue", 2022): 1000, ("revenue", 2025): 1331},
+                 periods={("revenue", 2025): {"period_start": "2025-07-01", "period_is_annual": False}})
+    r = revenue_cagr_3y(get)
+    assert (r.calc_status, r.value) == ("not_computed", None)
+    assert any("연간 기간 아님" in h for h in r.hold_reasons)
+
+
+def test_unconfirmed_period_blocks_calculation():
+    get = getter({("operating_cash_flow", 2025): 10, ("total_assets", 2024): 90, ("total_assets", 2025): 110},
+                 periods={("total_assets", 2025): {"period_status": "review_needed:period_not_found"}})
+    assert ocf_to_avg_assets(get).calc_status == "not_computed"
+
+
+def test_period_year_must_match_requested_year():
+    get = getter({("operating_cash_flow", 2025): 10, ("total_assets", 2024): 90, ("total_assets", 2025): 110},
+                 periods={("total_assets", 2024): {"period_end": "2023-12-31"}})
+    r = ocf_to_avg_assets(get)
+    assert r.calc_status == "not_computed" and any("사업연도와 다름" in h for h in r.hold_reasons)
+
+
+def test_zero_current_liabilities_is_not_score_eligible():
+    get = getter({("adjusted_current_assets", 2025): 5, ("adjusted_current_liabilities", 2025): 0,
+                  ("current_assets", 2025): 5, ("current_liabilities", 2025): 0})
+    hfs, reported = current_ratios(get)
+    assert hfs.score_eligible.startswith("보류")
+    assert reported.score_eligible.startswith("보류")
+
+
+@pytest.mark.parametrize("status", ["not_computed", "reference"])
+def test_finalize_never_leaves_non_normal_results_score_eligible(status):
+    r = finalize(Result("m", "m", "2025", value=None if status == "not_computed" else 1.0, calc_status=status, score_eligible="가능"))
+    assert r.score_eligible == "보류"
+
+
+def test_duplicate_calculation_input_rows_raise():
+    import pandas as pd
+    from src.metrics.run_2025 import make_getter
+    row = {"corp_code": "c", "fs_div": "CFS", "bsns_year": "2025", "canonical_account": "revenue", "label": "매출", "status": "mapped",
+           "value": "1", "rcept_no": "r", "extraction_method": "api_rule", "note": "", "period_type": "duration",
+           "period_start": "2025-01-01", "period_end": "2025-12-31", "period_status": "from_filing_text", "period_is_annual": "True"}
+    check = pd.DataFrame([row, {**row, "value": "2"}])
+    with pytest.raises(ValueError, match="중복"):
+        make_getter(check, "c", "CFS")("revenue", 2025)

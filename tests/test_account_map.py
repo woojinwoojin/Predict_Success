@@ -11,8 +11,11 @@ NONSTD = "-표준계정코드 미사용-"
 
 def row(sj_div, account_id, nm, value="100", detail="-", status="parsed", i=[0]):
     i[0] += 1
+    ptype = "instant" if sj_div == "BS" else "duration"
     return {"row_id": f"r{i[0]}", "sj_div": sj_div, "account_id": account_id, "account_nm": nm, "account_detail": detail,
-            "raw_amount": value, "value": value if status == "parsed" else None, "value_status": status}
+            "raw_amount": value, "value": value if status == "parsed" else None, "value_status": status,
+            "period_type": ptype, "period_start": None if ptype == "instant" else "2025-01-01", "period_end": "2025-12-31",
+            "period_status": "from_filing_text", "period_is_annual": None if ptype == "instant" else True}
 
 
 def account(name, rows):
@@ -94,8 +97,32 @@ def test_short_term_debt_includes_current_lease_liabilities():
         row("BS", "ifrs-full_CurrentLeaseLiabilities", "리스부채(유동)", "7"),
         row("BS", "ifrs-full_NoncurrentLeaseLiabilities", "리스부채(비유동)", "50"),  # 비유동은 넣지 않는다
     ])
-    assert (result["status"], result["value"]) == ("mapped", "137")
+    assert (result["status"], result["value"]) == ("candidate", "137")  # 찾은 구성 항목 합계 — 완전성은 수기 확인으로
     assert result["basis"] == "리스 포함"
+
+
+def test_found_components_without_completeness_evidence_stay_candidate():
+    # 검토 지적 ⑤: 기타유동부채 안에 리스가 있는지 모르면 정상 합계가 아니다 (한국화장품제조 사례)
+    result = account("short_term_interest_bearing_debt", [
+        row("BS", "ifrs-full_ShorttermBorrowings", "단기차입부채", "5000"),
+        row("BS", "ifrs-full_OtherCurrentLiabilities", "기타유동부채", "4222"),
+    ])
+    assert (result["status"], result["value"]) == ("candidate", "5000")
+    assert "완전성 미확인" in result["note"]
+
+
+def test_row_with_unconfirmed_period_is_not_mapped():
+    # 검토 지적 ⑥: 기간이 확인되지 않은 행은 매핑 성공으로 올리지 않는다
+    r = row("CIS", "ifrs-full_Revenue", "매출액", "100")
+    r["period_status"] = "review_needed:period_not_found"
+    result = account("revenue", [r])
+    assert result["status"] == "review_needed"
+    assert "기간 미확인" in result["note"]
+
+
+def test_mapped_result_carries_the_row_period():
+    result = account("revenue", [row("CIS", "ifrs-full_Revenue", "매출액", "100")])
+    assert (result["period_type"], result["period_start"], result["period_end"], result["period_is_annual"]) == ("duration", "2025-01-01", "2025-12-31", True)
 
 
 def test_total_and_its_components_together_are_not_double_counted():

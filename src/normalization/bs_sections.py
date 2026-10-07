@@ -46,10 +46,12 @@ def annotate_sections(rows: list[dict]) -> None:
                 if r["account_id"] in STOPPERS:
                     break
                 members.append(r)
+            # 값 없음·변환 실패 행을 0으로 메우지 않는다 — 하나라도 있으면 산술 검증 불가 (D11 ④)
+            unparsed = any(r["value_status"] != "parsed" for r in members)
             regular = sum((_value(r) for r in members if not is_held_for_sale(r)), Decimal(0))
             hfs = sum((_value(r) for r in members if is_held_for_sale(r)), Decimal(0))
             total = Decimal(subtotal["value"])
-            confirmed = regular == total or (hfs != 0 and regular + hfs == total)
+            confirmed = not unparsed and (regular == total or (hfs != 0 and regular + hfs == total))
             for r in members:
                 r["bs_section"] = SUBTOTALS[subtotal["account_id"]]
                 r["bs_section_sum_ok"] = confirmed
@@ -75,13 +77,21 @@ def held_for_sale_adjustment(rows: list[dict], kind: str) -> dict:
     hfs_rows = [r for r in rows if r["sj_div"] == "BS" and (r["account_id"] in ids or
                 (kind == "assets" and str(r["account_nm"]).strip() in ("매각예정자산", "매각예정비유동자산")) or
                 (kind == "liabilities" and str(r["account_nm"]).strip() in ("매각예정부채",)))]
-    hfs = sum((_value(r) for r in hfs_rows), Decimal(0))
-    out = {"reported": None if current is None else current["value"], "held_for_sale": str(hfs) if hfs_rows else None,
-           "included": "해당 없음", "adjusted": None if current is None else current["value"], "evidence": ""}
+    period = {k: (current or {}).get(k) for k in ("period_type", "period_start", "period_end", "period_status", "period_is_annual")}
+    out = {"reported": None if current is None else current["value"], "held_for_sale": None,
+           "included": "해당 없음", "adjusted": None if current is None else current["value"], "evidence": "", "period": period}
     if current is None:
         return {**out, "included": "확인 필요", "adjusted": None, "evidence": "유동 소계 행 없음"}
-    if not hfs_rows or hfs == 0:
-        return out
+    if not hfs_rows:
+        return {**out, "evidence": "매각예정 행 없음"}
+    # 행 없음 / 확인된 숫자 0 / 금액 결측을 구분한다. 결측을 0으로 바꾸지 않는다 (D11 ④)
+    if any(r["value_status"] != "parsed" for r in hfs_rows):
+        return {**out, "included": "확인 필요", "adjusted": None,
+                "evidence": "매각예정 행은 있으나 금액 결측·변환 실패: " + ", ".join(f"{r['account_nm']} '{r['raw_amount']}'" for r in hfs_rows if r["value_status"] != "parsed")}
+    hfs = sum((_value(r) for r in hfs_rows), Decimal(0))
+    out["held_for_sale"] = str(hfs)
+    if hfs == 0:
+        return {**out, "evidence": "매각예정 금액 0 (원문 숫자 0)"}
     if hfs < 0:  # 자산·부채 잔액이 음수인 것은 원문 표기 자체를 확인해야 한다 (코스맥스 2025: 주석은 '매각예정자산 없음')
         return {**out, "included": "확인 필요", "adjusted": None, "evidence": f"매각예정 잔액이 음수 ({hfs:,}) — 원문 확인 전 조정하지 않음"}
     inside = [r for r in hfs_rows if r.get("bs_section") == section and r.get("bs_section_sum_ok")]

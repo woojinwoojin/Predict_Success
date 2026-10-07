@@ -97,3 +97,23 @@ def test_manual_total_replaces_api_total_only_when_marked_and_components_confirm
     marked = {**fuller, "api_relation": "replaces_incomplete_api"}
     result = apply_confirmations(api, [marked], KEY, "R2025", "2025-12-31")
     assert (result["status"], result["value"]) == ("mapped", "6364")
+
+
+@pytest.mark.parametrize("unchecked", [{"amount_check": "미확인"}, {"scope_check": "미확인"}, {"component_check": "부분"}])
+def test_api_replacement_path_cannot_skip_common_checks(unchecked):
+    # 검토 지적 ①: 대체 조건을 만족해도 금액·범위·구성 확인을 건너뛰면 안 된다
+    api = {"canonical_account": "short_term_interest_bearing_debt", "label": "단기 이자부채", "basis": "리스 포함",
+           "status": "mapped", "value": "5000", "note": ""}
+    e = entry(canonical_account="short_term_interest_bearing_debt", value="6364", unit="원", unit_multiplier="1",
+              scope_check="확인", component_check="확인", api_relation="replaces_incomplete_api", **{})
+    e.update(unchecked)
+    result = apply_confirmations(api, [e], KEY, "R2025", "2025-12-31")
+    assert result["status"] != "mapped"
+
+
+def test_manual_value_that_differs_from_api_candidate_is_also_checked():
+    api = {"canonical_account": "short_term_interest_bearing_debt", "label": "단기 이자부채", "basis": "리스 포함",
+           "status": "candidate", "value": "5000", "note": ""}
+    e = entry(canonical_account="short_term_interest_bearing_debt", value="7000", unit="원", unit_multiplier="1",
+              scope_check="확인", component_check="확인")
+    assert apply_confirmations(api, [e], KEY, "R2025", "2025-12-31")["status"] == "review_needed"

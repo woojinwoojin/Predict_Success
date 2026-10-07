@@ -14,7 +14,8 @@ import pandas as pd
 
 from src.normalization.account_map import load_rules, map_report, tag_rows
 from src.normalization.bs_sections import held_for_sale_adjustment
-from src.normalization.build_facts import INTERIM, RAW, ROOT, latest_valid_filing
+from src.normalization.build_facts import INTERIM, RAW, ROOT
+from src.normalization.selection import load_published_filings, select_snapshot
 from src.normalization.dart_facts import build_facts, load_filings, mismatch_kind, same_period_mismatches
 from src.normalization.manual import apply_confirmations, load_confirmations
 
@@ -42,36 +43,40 @@ def main(as_of: str) -> None:
 
     all_labels = {n: spec["label"] for n, spec in config["accounts"].items()} | {n: label for n, (_, label) in ADJUSTED.items()}
     results, evidence_rows = [], []
-    for s in snaps:
-        key = {"corp_code": s["corp_code"], "company": NAMES.get(s["corp_code"], s["corp_code"]), "fs_div": s["fs_div"], "bsns_year": int(s["bsns_year"])}
-        if s["status"] == "013":
-            results += [{**key, "canonical_account": n, "label": label, "status": "no_data", "value": None,
-                         "note": "API 응답: 조회된 데이터 없음", "snapshot_id": s["snapshot_id"]} for n, label in all_labels.items()]
+    published = load_published_filings(RAW)
+    keys = sorted({(s["corp_code"], s["fs_div"], int(s["bsns_year"])) for s in snaps})
+    for corp, fs, year in keys:
+        key = {"corp_code": corp, "company": NAMES.get(corp, corp), "fs_div": fs, "bsns_year": year}
+        # 분석 입력은 키마다 스냅샷 하나만 명시적으로 고른다 (관측값은 모두 보관, D11 ②)
+        sel = select_snapshot(snaps, published, filings, corp, fs, year, as_of)
+        if sel.status != "selected":
+            results += [{**key, "canonical_account": n, "label": label, "status": sel.status, "value": None,
+                         "note": sel.note, "rcept_no": sel.rcept_no, "snapshot_id": sel.snapshot_id} for n, label in all_labels.items()]
             continue
-        selected = latest_valid_filing(filings, s["corp_code"], int(s["bsns_year"]), as_of)
-        if s["rcept_nos"] != [selected]:
-            results += [{**key, "canonical_account": n, "label": label, "status": "held", "value": None,
-                         "note": f"기준일 {as_of}의 선택 보고서 {selected} ≠ API 값의 보고서 {s['rcept_nos']}", "snapshot_id": s["snapshot_id"]}
-                        for n, label in all_labels.items()]
-            continue
-        end = current_end.get(s["snapshot_id"])
-        for m in map_report(by_snapshot.get(s["snapshot_id"], []), config):
+        selected, snapshot_id = sel.rcept_no, sel.snapshot_id
+        end = current_end.get(snapshot_id)  # 보고서 당기 종료일 — 수기 확인값·불일치 검토 연결용
+        for m in map_report(by_snapshot.get(snapshot_id, []), config):
             m = apply_confirmations(m, confirmations, key, selected, end)
-            linked = reviews[(reviews.corp_code == s["corp_code"]) & (reviews.fs_div == s["fs_div"]) & (reviews.period_end == end)
+            linked = reviews[(reviews.corp_code == corp) & (reviews.fs_div == fs) & (reviews.period_end == end)
                              & (reviews.canonical_account == m["canonical_account"])] if len(reviews) else []
             review_note = "; ".join(f"불일치 검토 {r.review_id}: {r.cause}" for r in linked.itertuples()) if len(linked) else ""
-            results.append({**key, **{k: v for k, v in m.items() if k != "evidence"}, "period_end": end, "mismatch_review": review_note,
-                            "rcept_no": selected, "snapshot_id": s["snapshot_id"]})
+            results.append({**key, "report_period_end": end, **{k: v for k, v in m.items() if k != "evidence"},
+                            "mismatch_review": review_note, "selection_note": sel.note, "rcept_no": selected, "snapshot_id": snapshot_id})
             evidence_rows += [{**key, "canonical_account": m["canonical_account"], **e} for e in m["evidence"]]
         for name, (kind, label) in ADJUSTED.items():
-            adj = held_for_sale_adjustment(by_snapshot.get(s["snapshot_id"], []), kind)
+            adj = held_for_sale_adjustment(by_snapshot.get(snapshot_id, []), kind)
             # 포함·해당 없음이면 조정값 = 보고값. 미포함 판정은 산술(보조 검증)만으로 나온 것이라 원문 확인 전에는 후보값 (D9)
             status = {"확인 필요": "review_needed", "미포함": "candidate"}.get(adj["included"], "mapped")
-            results.append({**key, "canonical_account": name, "label": label, "basis": "매각예정항목 포함", "status": status,
-                            "value": adj["adjusted"], "reported_value": adj["reported"], "held_for_sale": adj["held_for_sale"],
+            results.append({**key, "report_period_end": end, "canonical_account": name, "label": label, "basis": "매각예정항목 포함",
+                            "status": status, "value": adj["adjusted"], "reported_value": adj["reported"], "held_for_sale": adj["held_for_sale"],
                             "held_for_sale_included": adj["included"], "note": adj["evidence"] or f"매각예정 {adj['included']}",
                             "extraction_method": "api_rule+adjustment" if adj["included"] == "미포함" else ("api_rule" if status == "mapped" else ""),
-                            "period_end": end, "mismatch_review": "", "rcept_no": selected, "snapshot_id": s["snapshot_id"]})
+                            **adj["period"], "mismatch_review": "", "selection_note": sel.note, "rcept_no": selected, "snapshot_id": snapshot_id})
+
+    # 분석 입력 키(기업·재무기준·연도·계정)는 유일해야 한다
+    dupes = Counter((r["corp_code"], r["fs_div"], r["bsns_year"], r["canonical_account"]) for r in results)
+    if any(n > 1 for n in dupes.values()):
+        raise ValueError(f"점검표 키 중복: {[k for k, n in dupes.items() if n > 1][:5]}")
 
     check = pd.DataFrame(results)
     check.to_csv(INTERIM / "account_check.csv", index=False, encoding="utf-8-sig")
