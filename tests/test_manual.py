@@ -12,7 +12,7 @@ def entry(**kw):
     base = {"confirmation_id": "C1", "corp_code": "01009789", "fs_div": "CFS", "canonical_account": "interest_expense",
             "period_type": "duration", "period_start": "2025-01-01", "period_end": "2025-12-31", "value": "46,717,900", "unit": "천원",
             "unit_multiplier": "1000", "rcept_no": "R2025", "source_location": "주석 29", "components": "", "status": "confirmed",
-            "extraction_method": "manual"}
+            "extraction_method": "manual", "amount_check": "확인", "scope_check": "", "method": "test"}
     return {**base, **kw}
 
 
@@ -63,3 +63,12 @@ def test_confirmed_entry_needs_a_source_location(tmp_path):
 def test_only_manual_extraction_method_is_accepted(tmp_path):
     with pytest.raises(ValueError, match="manual"):
         load_confirmations(write(tmp_path, [entry(extraction_method="api_rule")]))
+
+
+def test_scope_unconfirmed_note_value_is_only_a_candidate():
+    with_basis = {**REVIEW, "basis": "리스 이자 포함"}
+    result = apply_confirmations(with_basis, [entry(amount_check="확인", scope_check="미확인")], KEY, "R2025", "2025-12-31")
+    assert result["status"] == "candidate"  # 계산용 후보값은 주되 점수 반영은 보류
+    assert result["value"] == "46717900000"
+    result = apply_confirmations(with_basis, [entry(amount_check="확인", scope_check="확인")], KEY, "R2025", "2025-12-31")
+    assert result["status"] == "mapped"

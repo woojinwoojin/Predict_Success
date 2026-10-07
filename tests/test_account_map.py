@@ -134,7 +134,7 @@ def test_short_term_debt_is_not_summed_when_an_ambiguous_item_exists():
 def test_map_report_covers_every_required_account():
     names = {r["canonical_account"] for r in map_report([], CONFIG)}
     assert names == set(CONFIG["accounts"])
-    assert len(names) == 13
+    assert len(names) == 15  # 필요한 13개 + 매각예정자산·부채 (D8)
 
 
 # ---------------------------------------------------------------- 기간 규칙 분리

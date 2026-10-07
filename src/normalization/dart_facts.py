@@ -11,6 +11,8 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from src.normalization.bs_sections import STOPPERS, annotate_sections
+
 # API 금액 열 → source_column. thstrm_add_amount(누적)는 분기·반기 보고서에만 값이 있다.
 AMOUNT_COLUMNS = {
     "thstrm_amount": ("당기", "thstrm_nm"),
@@ -187,13 +189,45 @@ def build_facts(raw_root: Path) -> tuple[list[dict], list[dict]]:
         rows.extend(flat)
         snaps.append({"snapshot_id": snapshot_id, **meta["request"], "status": meta["status"], "rows": len(flat),
                       "rcept_nos": meta.get("rcept_nos", [])})
+    annotate_sections(rows)  # 재무상태표 행의 유동·비유동 구간 (소계 합으로 확인된 것만)
     return rows, snaps
 
 
-def account_key(row: dict) -> tuple:
-    """같은 계정인지 비교할 때의 키. 표준코드가 없으면 계정명으로 비교하되 그 사실을 키에 남긴다."""
-    standard = row["account_id"] not in (None, "", "-", "-표준계정코드 미사용-")
-    return (row["sj_div"], row["account_id"] if standard else f"name:{row['account_nm']}", row["account_detail"])
+# 유동·비유동 어느 쪽에도 쓰이는 표준코드. 코드만으로는 구간 의미가 확정되지 않는다
+SECTION_AMBIGUOUS_CODES = {
+    "ifrs-full_BondsIssued", "dart_BondsIssued", "ifrs-full_Borrowings", "ifrs-full_LeaseLiabilities", "dart_ConvertibleBonds",
+    "ifrs-full_DerivativeFinancialLiabilities", "ifrs-full_DerivativeFinancialAssets", "ifrs-full_Provisions",
+    "ifrs-full_FinancialLiabilities", "ifrs-full_OtherFinancialLiabilities", "ifrs-full_FinancialAssets", "ifrs-full_OtherFinancialAssets",
+}
+SECTION_MARKERS = ("유동", "비유동", "단기", "장기")
+
+
+def is_nonstandard_id(account_id) -> bool:
+    return account_id in (None, "", "-", "-표준계정코드 미사용-") or account_id != account_id  # NaN
+
+
+def is_section_ambiguous(row: dict) -> bool:
+    """재무상태표에서 유동·비유동 의미가 계정 코드·이름으로 확정되지 않는 행."""
+    if row["sj_div"] != "BS" or row["account_id"] in STOPPERS:
+        return False
+    if is_nonstandard_id(row["account_id"]):
+        return not any(m in str(row["account_nm"]) for m in SECTION_MARKERS)
+    return row["account_id"] in SECTION_AMBIGUOUS_CODES
+
+
+def account_key(row: dict) -> tuple | None:
+    """같은 계정인지 비교할 때의 키. 표준코드가 없으면 계정명으로 비교하되 그 사실을 키에 남긴다.
+
+    유동·비유동 의미가 확정되지 않는 계정은 소계 합으로 확인된 구간을 키에 붙인다.
+    구간을 확인하지 못하면 None — 자동 비교·합산에서 뺀다 (한국콜마 사채 오매칭 M08 재발 방지).
+    """
+    standard = not is_nonstandard_id(row["account_id"])
+    base = row["account_id"] if standard else f"name:{row['account_nm']}"
+    if is_section_ambiguous(row):
+        if not row.get("bs_section_confirmed"):
+            return None
+        base = f"{base}@{row['bs_section']}"
+    return (row["sj_div"], base, row["account_detail"])
 
 
 def same_period_mismatches(rows: list[dict]) -> dict:
@@ -203,22 +237,30 @@ def same_period_mismatches(rows: list[dict]) -> dict:
     """
     within = {}
     for r in rows:
-        k = (r["snapshot_id"], r["source_column"]) + account_key(r)
+        key = account_key(r)
+        if key is None:
+            continue
+        k = (r["snapshot_id"], r["source_column"]) + key
         within[k] = within.get(k, 0) + 1
     ambiguous = {k[2:] + (k[0].split("/")[0],) for k, n in within.items() if n > 1}
 
     groups: dict[tuple, list] = {}
+    unconfirmed_section = 0
     for r in rows:
         if r["value_status"] != "parsed" or r["period_end"] is None:
             continue
         key = account_key(r)
+        if key is None:
+            unconfirmed_section += 1
+            continue
         if key + (r["corp_code"],) in ambiguous:
             continue
         # 비교 조건: 기업·연결/별도·재무제표·계정·세부 구분·기간 유형·기간·통화가 모두 같아야 같은 값으로 본다
         groups.setdefault((r["corp_code"], r["fs_div"]) + key + (r["period_type"], r["period_start"], r["period_end"], r["currency"]), []).append(r)
     compared = {k: g for k, g in groups.items() if len({(r["rcept_no"], r["source_column"]) for r in g}) > 1}
     mismatched = {k: g for k, g in compared.items() if len({Decimal(r["value"]) for r in g}) > 1}
-    return {"compared_groups": len(compared), "mismatched": mismatched, "ambiguous_keys": len(ambiguous)}
+    return {"compared_groups": len(compared), "mismatched": mismatched, "ambiguous_keys": len(ambiguous),
+            "excluded_unconfirmed_section_rows": unconfirmed_section}
 
 
 def mismatch_kind(group: list[dict]) -> dict:

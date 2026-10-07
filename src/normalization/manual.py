@@ -10,7 +10,8 @@ from pathlib import Path
 import pandas as pd
 
 REQUIRED = ["confirmation_id", "corp_code", "fs_div", "canonical_account", "period_type", "period_end", "value",
-            "unit", "unit_multiplier", "rcept_no", "source_location", "status", "extraction_method"]
+            "unit", "unit_multiplier", "rcept_no", "source_location", "status", "extraction_method",
+            "amount_check", "scope_check", "method"]
 
 
 def load_confirmations(path: Path) -> list[dict]:
@@ -54,5 +55,10 @@ def apply_confirmations(result: dict, entries: list[dict], key: dict, selected_r
     if result["status"] == "mapped" and Decimal(result["value"]) != manual_value:
         return {**result, "status": "review_needed", "value": None, "extraction_method": "",
                 "note": f"API 값 {result['value']}와 수기 확인값 {manual_value}({entry['confirmation_id']})이 다름"}
+    # 금액 확인과 범위(예: 리스 이자 포함) 확인은 따로 본다. 범위가 미확인이면 계산용 후보로만 쓰고 점수는 보류한다
+    scope_ok = not result.get("basis") or entry.get("scope_check") == "확인"
+    if not scope_ok:
+        return {**result, "status": "candidate", "value": str(manual_value), "extraction_method": "manual",
+                "note": f"수기 확인 {entry['confirmation_id']}: 금액 {entry.get('amount_check', '')}, '{result['basis']}' 범위 {entry.get('scope_check') or '미확인'} — 점수 반영 보류; {entry['source_location']}"}
     return {**result, "status": "mapped", "value": str(manual_value), "extraction_method": "manual",
             "note": "; ".join(filter(None, [f"수기 확인 {entry['confirmation_id']}: {entry['source_location']}", entry.get("components", ""), result.get("note") if result["status"] != "mapped" else ""]))}

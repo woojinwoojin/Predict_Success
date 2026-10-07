@@ -1,7 +1,8 @@
 """관측값 → 내부 계산용 계정(canonical_account) 매핑과 "기업 × 필요한 계정" 점검표 (docs/decisions.md D6).
 
 규칙은 configs/account_map_v1.yaml에 있다. 원본 account_id는 바꾸지 않는다.
-상태: mapped(매핑 성공) / review_needed(원문 확인 필요) / no_data(자료 없음) / empty_value(값 없음) / held(기준일 버전 없음, 보류)
+상태: mapped(매핑 성공) / candidate(계산용 후보, 점수 보류) / review_needed(원문 확인 필요) / no_data(자료 없음) /
+      empty_value(값 없음) / held(기준일 버전 없음, 보류) / not_applicable(해당 없음)
 """
 
 from decimal import Decimal
@@ -23,6 +24,12 @@ def rule_matches(rule: dict, row: dict, config: dict) -> bool:
         return False
     if "account_detail" in rule and row["account_detail"] != rule["account_detail"]:
         return False
+    if "section" in rule:  # 소계 합으로 확인된 구간 조건 (D8)
+        if rule["section"] == "unconfirmed":
+            if row.get("bs_section_confirmed"):
+                return False
+        elif not (row.get("bs_section") == rule["section"] and row.get("bs_section_confirmed")):
+            return False
     if "account_id" in rule:
         return row["account_id"] == rule["account_id"]
     if "nonstandard_name" in rule:  # 완전히 같은 이름만 (유사도 금지)
@@ -83,6 +90,8 @@ def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
     if reviews:
         return {**base, "status": "review_needed", "value": None, "evidence": ev,
                 "note": "; ".join(["본문 규칙에 맞는 행 없음, 확인 필요 후보: " + ", ".join(sorted({r["account_nm"] for r, _ in reviews}))] + notes)}
+    if spec.get("absent_ok"):
+        return {**base, "status": "not_applicable", "value": None, "evidence": ev, "note": "; ".join(["해당 행 없음"] + notes)}
     return {**base, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join(["해당 계정 행 없음 — 원문 확인"] + notes)}
 
 
