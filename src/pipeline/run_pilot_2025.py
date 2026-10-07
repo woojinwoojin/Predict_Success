@@ -23,7 +23,8 @@ from src.normalization.dart_facts import build_facts, load_filings
 from src.normalization.selection import load_published_filings, select_snapshot
 from src.scoring.score import coverage, score_row
 
-CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", "scoring_v1.yaml"]
+SCORING_FILE = "scoring_v2.yaml"  # v1은 보존 (제안, 반례로 대체됨)
+CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE]
 MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv"]
 
 
@@ -43,19 +44,25 @@ def score_all(metrics: pd.DataFrame, scoring: dict) -> tuple[pd.DataFrame, pd.Da
     rows, cover = [], []
     for company, g in metrics.groupby("company", sort=False):
         scored = []
+        context = {m["metric"]: m for m in g.to_dict("records")}
         for m in g.to_dict("records"):
             rule = rules.get(m["metric"])
-            res = score_row(m, rule, scoring, view_only)
+            res = score_row(m, rule, scoring, view_only, context)
             scored.append({**m, **res, "rule_method": rule["method"] if rule else "", "rule_direction": rule.get("direction") if rule else "",
                            "rule_points": json.dumps(rule.get("points")) if rule and rule.get("points") else "",
-                           "rule_version": f"{scoring['version']} ({scoring['status']})"})
+                           "rule_version": f"{scoring['version']} ({scoring['status']}, {scoring.get('validation_status', '-')})"})
         for area, spec in scoring["areas"].items():
             if spec.get("implemented") is False:
                 scored.append({"company": company, "corp_code": g.corp_code.iloc[0], "metric": f"{area}_area", "metric_label": spec["label"] + " (영역 전체)",
                                "score_status": "not_implemented", "weight": spec["weight"], "score": None, "trace_score": None, "contribution": None,
-                               "score_reason": "미구현", "rule_version": f"{scoring['version']} ({scoring['status']})"})
+                               "score_reason": "미구현", "rule_version": f"{scoring['version']} ({scoring['status']}, {scoring.get('validation_status', '-')})"})
         rows += scored
-        cover.append({"company": company, "corp_code": g.corp_code.iloc[0], **coverage(scored, scoring)})
+        c = coverage(scored, scoring)
+        # 저장되는 미반올림 기여도의 합은 집계값과 일치해야 한다
+        total = sum(r["contribution"] for r in scored if r.get("score_status") == "scored")
+        if abs(total - c["K_unrounded"]) > 1e-9:
+            raise ValueError(f"{company}: 지표별 기여도 합 {total} ≠ 집계 K {c['K_unrounded']}")
+        cover.append({"company": company, "corp_code": g.corp_code.iloc[0], **c})
     return pd.DataFrame(rows), pd.DataFrame(cover)
 
 
@@ -70,7 +77,7 @@ def main(as_of: str) -> None:
     run_2025.main()
 
     # 2) 점수·커버리지
-    scoring = yaml.safe_load((ROOT / "configs" / "scoring_v1.yaml").read_text(encoding="utf-8"))
+    scoring = yaml.safe_load((ROOT / "configs" / SCORING_FILE).read_text(encoding="utf-8"))
     metrics = pd.read_csv(INTERIM / "metrics_2025.csv", dtype=str, keep_default_na=False)
     scores, cover = score_all(metrics, scoring)
     scores.to_csv(INTERIM / "scores_2025.csv", index=False, encoding="utf-8-sig")
@@ -110,8 +117,9 @@ def main(as_of: str) -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"\n[실행 기록] {out / 'manifest.json'}  (코드 {manifest['code']['commit'][:7]}{' + 미커밋 변경' if manifest['code']['dirty'] else ''}, 점수 규칙 {scoring['status']})")
-    print(cover[["company", "K_confirmed_contribution", "scored_weight", "held_weight", "validation_only_weight", "not_implemented_weight",
-                 "not_applicable_weight", "range_low", "range_high", "weighted_coverage", "coverage_status"]].to_string(index=False))
+    print("K =", cover["K_label"].iloc[0])
+    print(cover[["company", "K_contribution", "scored_weight", "held_weight", "validation_only_weight", "not_implemented_weight",
+                 "not_applicable_weight", "range_low", "range_high_loose", "weighted_coverage", "coverage_status"]].to_string(index=False))
 
 
 if __name__ == "__main__":
