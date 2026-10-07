@@ -224,7 +224,7 @@ def account_key(row: dict) -> tuple | None:
     standard = not is_nonstandard_id(row["account_id"])
     base = row["account_id"] if standard else f"name:{row['account_nm']}"
     if is_section_ambiguous(row):
-        if not row.get("bs_section_confirmed"):
+        if not row.get("bs_section_sum_ok"):
             return None
         base = f"{base}@{row['bs_section']}"
     return (row["sj_div"], base, row["account_detail"])

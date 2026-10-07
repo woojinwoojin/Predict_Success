@@ -65,7 +65,8 @@ def main(as_of: str) -> None:
             evidence_rows += [{**key, "canonical_account": m["canonical_account"], **e} for e in m["evidence"]]
         for name, (kind, label) in ADJUSTED.items():
             adj = held_for_sale_adjustment(by_snapshot.get(s["snapshot_id"], []), kind)
-            status = "review_needed" if adj["included"] == "확인 필요" else "mapped"
+            # 포함·해당 없음이면 조정값 = 보고값. 미포함 판정은 산술(보조 검증)만으로 나온 것이라 원문 확인 전에는 후보값 (D9)
+            status = {"확인 필요": "review_needed", "미포함": "candidate"}.get(adj["included"], "mapped")
             results.append({**key, "canonical_account": name, "label": label, "basis": "매각예정항목 포함", "status": status,
                             "value": adj["adjusted"], "reported_value": adj["reported"], "held_for_sale": adj["held_for_sale"],
                             "held_for_sale_included": adj["included"], "note": adj["evidence"] or f"매각예정 {adj['included']}",

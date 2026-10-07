@@ -1,7 +1,8 @@
 """재무상태표 행의 유동·비유동 구간을 산술로 확인한다 (docs/decisions.md D8).
 
 API 응답의 행 순서(ord)에서 소계 행 뒤에 오는 항목들을 그 소계의 구간 후보로 보고,
-항목 합이 소계와 원 단위까지 같을 때만 "확인"으로 표시한다. 같지 않으면 구간을 쓰지 않는다.
+항목 합이 소계와 원 단위까지 같으면 bs_section_sum_ok = True. 이것은 **보조 검증**이다 (D9):
+구간 경계와 원문·계정 의미까지 확인된 경우에만 유동·비유동 분류 근거로 쓴다. 비교 키를 나누는 데에만(잘못 합치지 않게) 쓴다.
 순서만으로는 판단하지 않는다 (자본 항목이 자본총계보다 먼저 나오는 등 회사마다 배치가 다르다).
 """
 
@@ -28,11 +29,11 @@ def _value(row: dict) -> Decimal:
 
 
 def annotate_sections(rows: list[dict]) -> None:
-    """재무상태표 행에 bs_section / bs_section_confirmed를 붙인다 (보고서·열 단위로 따로 확인)."""
+    """재무상태표 행에 bs_section / bs_section_sum_ok를 붙인다 (보고서·열 단위로 따로 확인)."""
     groups: dict[tuple, list] = {}
     for r in rows:
         r.setdefault("bs_section", None)
-        r.setdefault("bs_section_confirmed", False)
+        r.setdefault("bs_section_sum_ok", False)
         if r["sj_div"] == "BS":
             groups.setdefault((r["snapshot_id"], r["source_column"]), []).append(r)
     for group in groups.values():
@@ -51,10 +52,10 @@ def annotate_sections(rows: list[dict]) -> None:
             confirmed = regular == total or (hfs != 0 and regular + hfs == total)
             for r in members:
                 r["bs_section"] = SUBTOTALS[subtotal["account_id"]]
-                r["bs_section_confirmed"] = confirmed
+                r["bs_section_sum_ok"] = confirmed
                 # 매각예정 행은 소계에 실제로 포함됐을 때만 그 구간으로 확인한다
                 if is_held_for_sale(r):
-                    r["bs_section_confirmed"] = confirmed and regular != total
+                    r["bs_section_sum_ok"] = confirmed and regular != total
 
 
 def held_for_sale_adjustment(rows: list[dict], kind: str) -> dict:
@@ -83,11 +84,11 @@ def held_for_sale_adjustment(rows: list[dict], kind: str) -> dict:
         return out
     if hfs < 0:  # 자산·부채 잔액이 음수인 것은 원문 표기 자체를 확인해야 한다 (코스맥스 2025: 주석은 '매각예정자산 없음')
         return {**out, "included": "확인 필요", "adjusted": None, "evidence": f"매각예정 잔액이 음수 ({hfs:,}) — 원문 확인 전 조정하지 않음"}
-    inside = [r for r in hfs_rows if r.get("bs_section") == section and r.get("bs_section_confirmed")]
+    inside = [r for r in hfs_rows if r.get("bs_section") == section and r.get("bs_section_sum_ok")]
     if inside:
         return {**out, "included": "포함", "evidence": f"매각예정 {hfs:,}이 유동 구간 안에 있고, 구간 항목 합 + 매각예정 = 소계 {Decimal(current['value']):,}"}
     current_rows = [r for r in rows if r.get("bs_section") == section]
-    section_ok = bool(current_rows) and all(r["bs_section_confirmed"] for r in current_rows if not is_held_for_sale(r))
+    section_ok = bool(current_rows) and all(r["bs_section_sum_ok"] for r in current_rows if not is_held_for_sale(r))
     identity = (noncurrent is not None and total is not None
                 and Decimal(current["value"]) + Decimal(noncurrent["value"]) + hfs == Decimal(total["value"]))
     if section_ok and identity:

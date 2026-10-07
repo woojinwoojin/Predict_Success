@@ -26,9 +26,9 @@ def rule_matches(rule: dict, row: dict, config: dict) -> bool:
         return False
     if "section" in rule:  # 소계 합으로 확인된 구간 조건 (D8)
         if rule["section"] == "unconfirmed":
-            if row.get("bs_section_confirmed"):
+            if row.get("bs_section_sum_ok"):
                 return False
-        elif not (row.get("bs_section") == rule["section"] and row.get("bs_section_confirmed")):
+        elif not (row.get("bs_section") == rule["section"] and row.get("bs_section_sum_ok")):
             return False
     if "account_id" in rule:
         return row["account_id"] == rule["account_id"]

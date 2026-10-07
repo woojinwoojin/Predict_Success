@@ -55,15 +55,15 @@ def find(rows, nm, section=None):
 def test_section_is_confirmed_only_when_items_sum_to_subtotal():
     rows = balance_sheet(cl_items=[(NONSTD, "사채", "40"), ("ifrs-full_TradeAndOtherCurrentPayables", "매입채무", "60")],
                          ncl_items=[("dart_BondsIssued", "사채", "300")])
-    assert (find(rows, "사채", "current_liabilities")["bs_section_confirmed"], find(rows, "사채", "noncurrent_liabilities")["bs_section_confirmed"]) == (True, True)
+    assert (find(rows, "사채", "current_liabilities")["bs_section_sum_ok"], find(rows, "사채", "noncurrent_liabilities")["bs_section_sum_ok"]) == (True, True)
 
     broken = [dict(r) for r in rows]
     next(r for r in broken if r["account_nm"] == "매입채무").update(value="61", raw_amount="61")
     annotate_sections_fresh = __import__("src.normalization.bs_sections", fromlist=["annotate_sections"]).annotate_sections
     for r in broken:
-        r.pop("bs_section"); r.pop("bs_section_confirmed")
+        r.pop("bs_section"); r.pop("bs_section_sum_ok")
     annotate_sections_fresh(broken)
-    assert find(broken, "매입채무")["bs_section_confirmed"] is False
+    assert find(broken, "매입채무")["bs_section_sum_ok"] is False
 
 
 def test_comparison_key_separates_current_and_noncurrent_bonds():
@@ -75,7 +75,7 @@ def test_comparison_key_separates_current_and_noncurrent_bonds():
 
 def test_ambiguous_account_without_confirmed_section_is_not_compared():
     row = bs(9, "ifrs-full_BondsIssued", "사채", "40")
-    row.update(bs_section="current_liabilities", bs_section_confirmed=False)
+    row.update(bs_section="current_liabilities", bs_section_sum_ok=False)
     assert account_key(row) is None
     explicit = bs(9, "ifrs-full_ShorttermBorrowings", "단기차입금", "40")  # 코드가 유동을 명시하면 구간 없이도 비교한다
     assert account_key(explicit) == ("BS", "ifrs-full_ShorttermBorrowings", "-")
@@ -88,18 +88,25 @@ def debt(rows):
     return map_account("short_term_interest_bearing_debt", CONFIG["accounts"]["short_term_interest_bearing_debt"], rows, CONFIG)
 
 
-def test_bond_in_confirmed_current_section_counts_and_noncurrent_does_not():
+def test_bond_in_sum_matched_current_section_is_not_auto_summed():
+    # 산술 일치는 보조 검증 (D9) — 구분 없는 코드의 사채는 원문 확인 전 자동 합산하지 않는다
     rows = balance_sheet(cl_items=[("ifrs-full_BondsIssued", "사채", "40"), ("ifrs-full_ShorttermBorrowings", "단기차입금", "60")],
                          ncl_items=[("ifrs-full_BondsIssued", "사채", "300")])
     result = debt(rows)
-    assert (result["status"], result["value"]) == ("mapped", "100")
+    assert result["status"] == "review_needed"
+    assert "산술상 유동 구간" in " ".join(e["why"] for e in result["evidence"])
+
+
+def test_noncurrent_bond_is_not_a_short_term_debt_candidate():
+    rows = balance_sheet(cl_items=[("ifrs-full_ShorttermBorrowings", "단기차입금", "60")], ncl_items=[("ifrs-full_BondsIssued", "사채", "300")])
+    assert (debt(rows)["status"], debt(rows)["value"]) == ("mapped", "60")
 
 
 def test_bond_with_unconfirmed_section_is_a_review_candidate():
     rows = balance_sheet(cl_items=[("ifrs-full_BondsIssued", "사채", "40")], ncl_items=[])
     for r in rows:
         if r["account_nm"] == "사채":
-            r["bs_section_confirmed"] = False
+            r["bs_section_sum_ok"] = False
     assert debt(rows)["status"] == "review_needed"
 
 

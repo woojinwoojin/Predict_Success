@@ -125,15 +125,6 @@ accounts:
       - {statement: balance, nonstandard_name: "전환사채(유동)", why: "이름이 유동임을 명시"}
       - {statement: balance, nonstandard_name: "유동리스부채", why: "이름이 유동임을 명시"}
       - {statement: balance, nonstandard_name: "리스부채(유동)", why: "이름이 유동임을 명시"}
-      # 유동·비유동 구분 없는 코드·이름이라도, 소계 합으로 확인된 유동부채 구간 안에 있으면 유동 항목이다 (D8)
-      - {statement: balance, account_id: ifrs-full_BondsIssued, section: current_liabilities, why: "구분 없는 코드 — 확인된 유동부채 구간 안"}
-      - {statement: balance, account_id: dart_BondsIssued, section: current_liabilities, why: "위와 같음"}
-      - {statement: balance, account_id: ifrs-full_Borrowings, section: current_liabilities, why: "위와 같음"}
-      - {statement: balance, account_id: ifrs-full_LeaseLiabilities, section: current_liabilities, why: "위와 같음"}
-      - {statement: balance, nonstandard_name: "차입금", section: current_liabilities, why: "구분 없는 이름 — 확인된 유동부채 구간 안"}
-      - {statement: balance, nonstandard_name: "사채", section: current_liabilities, why: "위와 같음"}
-      - {statement: balance, nonstandard_name: "전환사채", section: current_liabilities, why: "위와 같음"}
-      - {statement: balance, nonstandard_name: "리스부채", section: current_liabilities, why: "위와 같음"}
     # 합계 항목(앞)과 그 구성 항목(뒤)이 같은 보고서에 함께 있으면 중복 합산 가능 → 확인 필요
     overlaps:
       - [ifrs-full_CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived, [ifrs-full_ShorttermBorrowings, ifrs-full_CurrentPortionOfLongtermBorrowings]]
@@ -142,12 +133,21 @@ accounts:
       - {statement: balance, account_id: ifrs-full_CurrentFinancialLiabilities, why: "단기금융부채 — 차입금이 합쳐져 있을 수 있다. 주석으로 구성 확인"}
       - {statement: balance, account_id: ifrs-full_OtherCurrentFinancialLiabilities, why: "기타유동금융부채 — 기타채무가 대부분일 수 있다(한국콜마 M04~M07). 주석으로 구성 확인"}
       - {statement: balance, account_id: dart_CurrentPortionOfConvertibleRedeemablePreferredStockLiabilities, why: "상환전환우선주부채 — 이자부채 포함 여부 확인"}
-      # 구분 없는 코드·이름은 구간을 확인하지 못했을 때만 확인 필요 후보 (비유동 구간으로 확인되면 해당 없음)
-      - {statement: balance, account_id: ifrs-full_BondsIssued, section: unconfirmed, why: "유동·비유동 구분 없는 코드 — 구간 미확인 (한국콜마 2023 유동 사채가 이 코드)"}
+      # 구분 없는 코드·이름은 자동 합산하지 않는다. 소계 합이 맞는 유동 구간 안이라도 산술 일치는 보조 검증이라
+      # 구간 경계·원문·계정 의미를 확인하기 전에는 확인 필요 후보로 둔다 (D9)
+      - {statement: balance, account_id: ifrs-full_BondsIssued, section: current_liabilities, why: "산술상 유동 구간 — 원문 확인 전 자동 합산 안 함 (한국콜마 2023 유동 사채가 이 코드)"}
+      - {statement: balance, account_id: dart_BondsIssued, section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, account_id: ifrs-full_Borrowings, section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, account_id: ifrs-full_LeaseLiabilities, section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "차입금", section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "사채", section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "전환사채", section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, nonstandard_name: "리스부채", section: current_liabilities, why: "위와 같음"}
+      - {statement: balance, account_id: ifrs-full_BondsIssued, section: unconfirmed, why: "유동·비유동 구분 없는 코드 — 구간 산술도 안 맞음"}
       - {statement: balance, account_id: dart_BondsIssued, section: unconfirmed, why: "위와 같음"}
       - {statement: balance, account_id: ifrs-full_Borrowings, section: unconfirmed, why: "위와 같음"}
       - {statement: balance, account_id: ifrs-full_LeaseLiabilities, section: unconfirmed, why: "위와 같음"}
-      - {statement: balance, nonstandard_name: "차입금", section: unconfirmed, why: "유동·비유동 구분이 이름에 없고 구간도 미확인"}
+      - {statement: balance, nonstandard_name: "차입금", section: unconfirmed, why: "유동·비유동 구분이 이름에 없고 구간 산술도 안 맞음"}
       - {statement: balance, nonstandard_name: "사채", section: unconfirmed, why: "위와 같음"}
       - {statement: balance, nonstandard_name: "전환사채", section: unconfirmed, why: "위와 같음"}
       - {statement: balance, nonstandard_name: "리스부채", section: unconfirmed, why: "위와 같음"}

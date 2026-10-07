@@ -1,0 +1,20 @@
+# 기업별 재무 기준과 비교군 (docs/decisions.md D9)
+version: basis_v1
+default_basis: CFS
+# 연결을 우선하는 이유: 이 프로젝트는 그룹 전체의 사업성과를 평가하기 때문이다.
+# (모든 투자·신용 판단의 단위가 항상 연결그룹이라는 뜻은 아니다)
+companies:
+  "01009789": {name: 코스맥스, basis: CFS, peer_group: cosmetics_odm_pilot, reason: "연결 — 해외 법인도 화장품 ODM"}
+  "00763473": {name: 코스메카코리아, basis: CFS, peer_group: cosmetics_odm_pilot, reason: "연결 — 해외 법인도 같은 사업"}
+  "01226410": {name: 씨앤씨인터내셔널, basis: CFS, peer_group: cosmetics_odm_pilot, reason: "연결 (연결 ≈ 별도)"}
+  "00160621": {name: 한국화장품제조, basis: OFS, peer_group: cosmetics_odm_pilot,
+               reason: "별도 — 종속회사 없음 (2025 사업보고서 '연결대상 종속회사 현황' 전부 '-', '2. 연결재무제표 — 해당사항 없음')",
+               basis_evidence_rcept_no: "20260813000488"}
+  "00939331": {name: 한국콜마, basis: CFS, peer_group: null,
+               reason: "연결 — 그룹 전체 재무안정성. 연결에 전문의약품·H&B·패키징이 포함되어 화장품 ODM 비교군에서 제외",
+               peer_exclusion: "연결 사업범위가 비교 업종과 다름 (D2)"}
+peer_groups:
+  cosmetics_odm_pilot:
+    label: 화장품 ODM 파일럿 비교군
+    pilot: true  # 계산 검증용. 평가기업을 빼면 비교 상대가 3개 — 안정적인 업종 순위·종합점수로 해석하지 않는다
+    min_size_for_scoring: 20  # README 7.1: n < 20이면 작은 비교군 경보
