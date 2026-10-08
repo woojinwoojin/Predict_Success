@@ -70,7 +70,7 @@ def build_baseline(rows: list[dict], snaps: list[dict], filings: dict, published
             out.append({**base, "status": "review_needed", "value": None, "note": "기초값 확인 실패: " + "; ".join(problems)})
             continue
         result, found = cross_check(u, rows, published, as_of)
-        note = f"{u['account_nm']} ({u['account_id']}), 기간 {m.get('period_start') or ''}~{m['period_end']}, 다른 보고서 대조 {result}: " + "; ".join(found)
+        note = f"{u['account_nm']} ({u['account_id']}), 기간 {m.get('period_start') or ''}~{m['period_end']}, 다른 보고서 대조 결과 '{result}': " + "; ".join(found)
         if result == "불일치":
             out.append({**base, "status": "review_needed", "value": None, "cross_check": result,
                         "note": "같은 기간 다른 보고서 값과 다름 — 원인 확인 전 보류 (재작성으로 단정하지 않음). " + note})

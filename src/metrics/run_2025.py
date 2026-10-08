@@ -22,7 +22,7 @@ def make_getter(check: pd.DataFrame, corp: str, fs: str):
     def get(account: str, year: int) -> Input:
         row = sub[(sub.canonical_account == account) & (sub.bsns_year == str(year))]
         if row.empty:
-            return Input(account, year, "missing", None, "", "점검표에 없음")
+            return Input(account, year, "missing", None, "", "점검표에 없음", account=account)
         if len(row) > 1:  # 분석 입력 키는 유일해야 한다 — 행 순서로 고르지 않는다 (D11 ②)
             raise ValueError(f"계산 입력 중복: {corp} {fs} {year} {account} ({len(row)}행)")
         r = row.iloc[0]
@@ -30,7 +30,7 @@ def make_getter(check: pd.DataFrame, corp: str, fs: str):
         annual = {"True": True, "False": False}.get(str(r.get("period_is_annual", "")))
         return Input(r["label"], year, r["status"], value, f"{r['rcept_no']} {r['extraction_method'] or ''}".strip(), r["note"] or "",
                      r.get("period_type") or None, r.get("period_start") or None, r.get("period_end") or None,
-                     r.get("period_status") or None, annual)
+                     r.get("period_status") or None, annual, account=account)
     return get
 
 

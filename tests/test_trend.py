@@ -5,7 +5,8 @@ from decimal import Decimal
 import pandas as pd
 
 from src.metrics.engine import ocf_to_avg_assets, revenue_yoy_growth
-from src.metrics.run_trend import CAUTION, COMPARABLE, HOLD_REFERENCE, NOT_COMPARABLE, comparability, review_reasons, scope_reasons
+from src.metrics.run_trend import (CAUTION, COMPARABLE, HOLD_REFERENCE, NOT_COMPARABLE, comparability, pair_table, review_reasons,
+                                   scope_reasons)
 from src.metrics.working_capital import ADJ_ID, CGO_ID, NI_ID, OCF_ID, WC_ID, working_capital
 from src.normalization import baseline
 from src.normalization.manual import apply_hfs_confirmation
@@ -128,27 +129,36 @@ def cf(account_id, value, **kw):
 def test_working_capital_uses_reported_subtotal_and_confirms_sign_by_identity():
     rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, -20), cf(CGO_ID, 60)]
     wc = working_capital(rows, Decimal(1000), 0.05)
-    assert wc["wc_amount"] == "-20" and wc["sign_status"] == "확인" and wc["ocf_direction"].startswith("OCF 감소")
+    assert wc["wc_amount"] == "-20" and wc["sign_status"] == "산술 일치" and wc["ocf_direction"].startswith("감소")
+    assert wc["identity_target"] == "영업에서 창출된 현금" and "API 응답 순서" in wc["identity_rows"]
     assert wc["caution"] == ""  # 2% < 5%
-    assert "구성 범위 미확인" in wc["components"]
+    assert "범위·완전성 미확인" in wc["completeness"] and wc["one_off"].startswith("미판정")
 
 
 def test_identity_with_operating_cash_flow_and_paid_items():
     rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, 20), cf(OCF_ID, 92),
             cf("ifrs-full_IncomeTaxesPaidRefund", 10), cf("ifrs-full_InterestReceivedClassifiedAsOperatingActivities", 2)]
-    assert working_capital(rows, Decimal(1000), 0.05)["sign_status"] == "확인"
+    wc = working_capital(rows, Decimal(1000), 0.05)
+    assert wc["sign_status"] == "산술 일치" and wc["identity_target"].startswith("영업현금흐름")
 
 
 def test_sign_unconfirmed_when_identity_fails_and_direction_not_stated():
     rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, -100), cf(CGO_ID, 999)]
     wc = working_capital(rows, Decimal(1000), 0.05)
-    assert wc["sign_status"] == "부호 미확인" and wc["ocf_direction"].startswith("미확인")
-    assert wc["caution"].startswith("운전자본 변동 규모 주의")  # 규모는 절대값으로 판단 (10%)
+    assert wc["sign_status"] == "검증 미완료" and wc["ocf_direction"].startswith("미확인")
+    assert wc["caution_flag"] and wc["caution"].startswith("규모 주의 — 현금흐름 영향 방향 미확인")  # 규모는 절대값으로 판단 (10%)
+
+
+def test_cash_flow_net_income_code_is_used_only_when_it_is_the_single_net_income_row():
+    alt = "dart_ProfitLossForStatementOfCashFlows"
+    assert working_capital([cf(alt, 50), cf(ADJ_ID, 30), cf(WC_ID, -20), cf(CGO_ID, 60)], Decimal(1000), 0.05)["sign_status"] == "산술 일치"
+    both = [cf(NI_ID, 50), cf(alt, 50), cf(ADJ_ID, 30), cf(WC_ID, -20), cf(CGO_ID, 60)]
+    assert working_capital(both, Decimal(1000), 0.05)["sign_status"] == "검증 미완료"  # 두 행이면 고르지 않는다
 
 
 def test_missing_subtotal_is_not_rebuilt_from_balance_sheet():
     wc = working_capital([cf(NI_ID, 50)], Decimal(1000), 0.05)
-    assert wc["wc_status"] == "누락" and wc["wc_amount"] is None and wc["caution"].startswith("확인 불가")
+    assert wc["wc_status"].startswith("추가 확인 필요") and wc["wc_amount"] is None and not wc["caution_flag"]
 
 
 # ---------------------------------------------------------------- 비교 가능성
@@ -166,7 +176,8 @@ def test_reclassification_flags_year_and_following_year_for_affected_metrics():
                              "period_end": "2023-12-31", "cause": "재분류", "cause_detail": "기준서 개정"}])
     causes = {"재분류": "분류 기준 변경 — 단순 증감 해석 주의"}
     for y, expected in ((2022, 0), (2023, 1), (2024, 1), (2025, 0)):
-        assert len(review_reasons(reviews, causes, "C", "CFS", "current_ratio_reported", y)) == expected
+        found = review_reasons(reviews, causes, "C", "CFS", "current_ratio_reported", y)
+        assert len(found) == expected and all(x.pairs == ((2023, 2024),) and x.span == "2023↔2024 비교 주의" for x in found)
     assert review_reasons(reviews, causes, "C", "CFS", "operating_margin", 2023) == []
     assert review_reasons(reviews, causes, "C", "OFS", "current_ratio_reported", 2023) == []
 
@@ -174,6 +185,28 @@ def test_reclassification_flags_year_and_following_year_for_affected_metrics():
 def test_scope_changes_flag_consolidated_years_only():
     scope = pd.DataFrame([{"corp_code": "C", "fs_div": "CFS", "bsns_year": "2023", "change_type": "신규연결", "entity": "A", "reason": "설립"},
                           {"corp_code": "C", "fs_div": "CFS", "bsns_year": "2024", "change_type": "변동 없음", "entity": "-", "reason": "-"}])
-    assert "영향 규모 미확인" in scope_reasons(scope, "C", "CFS", 2023)[0]
+    r = scope_reasons(scope, "C", "CFS", 2023)[0]
+    assert "영향 규모 미확인" in r.text and r.pairs == ((2022, 2023), (2023, 2024))
     assert scope_reasons(scope, "C", "CFS", 2024) == []
     assert scope_reasons(scope, "C", "OFS", 2023) == []
+
+
+def test_pair_table_scopes_caution_to_the_affected_span():
+    years = [2022, 2023, 2024, 2025]
+    trend = pd.DataFrame([{"company": "회사", "corp_code": "C", "metric": "m", "metric_label": "지표", "year": y, "calc_status": "정상"} for y in years])
+    reviews = pd.DataFrame([{"review_id": "M01", "corp_code": "C", "fs_div": "CFS", "canonical_account": "current_liabilities",
+                             "period_end": "2023-12-31", "cause": "재분류", "cause_detail": ""}])
+    found = review_reasons(reviews, {"재분류": "분류 기준 변경"}, "C", "CFS", "current_ratio_reported", 2023)
+    reasons = {("C", "m", y): (found if y in (2023, 2024) else []) for y in years}
+    t = pair_table(trend, reasons, years).set_index("span").comparability
+    assert t["2022↔2023"] == COMPARABLE and t["2023↔2024"] == CAUTION and t["2024↔2025"] == COMPARABLE
+    assert t["2022~2025 전체"] == "전체 추세 주의 — 주의 구간 2023↔2024"
+
+
+def test_pair_with_uncomputed_year_is_not_comparable_and_whole_trend_says_so():
+    years = [2022, 2023, 2024, 2025]
+    trend = pd.DataFrame([{"company": "회사", "corp_code": "C", "metric": "m", "metric_label": "지표", "year": y,
+                           "calc_status": "계산 안 함" if y == 2022 else "정상"} for y in years])
+    t = pair_table(trend, {("C", "m", y): [] for y in years}, years).set_index("span").comparability
+    assert t["2022↔2023"] == NOT_COMPARABLE and t["2023↔2024"] == COMPARABLE
+    assert t["2022~2025 전체"].startswith("전체 추세 비교 불가")

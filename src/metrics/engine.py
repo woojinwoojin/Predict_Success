@@ -31,6 +31,7 @@ class Input:
     period_end: str | None = None
     period_status: str | None = None
     period_is_annual: bool | None = None
+    account: str = ""  # 내부 계정 키 (근거 연결용)
 
     def period_problem(self) -> str | None:
         """값이 있는 입력의 기간 조건 (D11 ⑥): 기간 확인, 요청 연도와 일치, 흐름 값은 연간."""
