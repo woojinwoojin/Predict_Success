@@ -1,0 +1,30 @@
+# 2022~2025 추세 비교 설정 (docs/decisions.md D14)
+version: trend_v1
+title: 기준일 현재 확보한 공시를 사용한 2022~2025 회고 추세
+# 모든 연도에 하나의 분석 기준일을 쓴다 — 각 연도 당시 알 수 있었던 정보만으로 평가한 결과가 아니다
+score_use: 참고 표시만 — 기존 2025 점수·커버리지에 반영하지 않음
+years: [2022, 2023, 2024, 2025]
+metrics:  # 단년 지표 10개 (3년 CAGR·성장률 변동성은 기존 2022~2025 요약값 유지, 연도별 이동 구간 계산 안 함)
+  - ocf_to_avg_assets
+  - debt_ratio
+  - interest_coverage
+  - current_ratio_hfs
+  - cash_to_short_term_debt
+  - revenue_yoy_growth
+  - operating_margin
+  - roa
+  - inventory_turnover
+  - current_ratio_reported
+baseline:
+  year: 2021
+  source: 2022 사업연도 선택 보고서의 전기 열
+  accounts: [total_assets, inventory, revenue]
+working_capital:
+  source: 현금흐름표 본문 '영업활동으로 인한 자산·부채의 변동' 공시 소계 (dart_AdjustmentsForAssetsLiabilitiesOfOperatingActivities)
+  caution_threshold: 0.05  # |운전자본 변동| / 평균 총자산. 탐색용 초기 기준 — 회계기준이 정한 값 아님
+  caution_status: exploratory  # 점수 감점·일회성 판정으로 이어지지 않는다
+# 재분류·표시 범위 변경(data/manual/mismatch_reviews.csv)이 확인된 기간 Y는 Y와 Y+1 지표에 비교 주의를 붙인다
+# (Y+1 보고서의 비교 표시가 바뀐 기준이라 Y → Y+1 증감에 분류 변경이 섞인다)
+comparability_causes:
+  재분류: 분류 기준 변경 — 단순 증감 해석 주의
+  계정 범위 차이: 표시 범위 변경 — 단순 증감 해석 주의

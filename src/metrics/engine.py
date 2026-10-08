@@ -1,4 +1,4 @@
-"""2025 지표 계산 (README 6.1~6.3, docs/decisions.md D9). 점수(0~100 변환)는 아직 하지 않는다.
+"""연도별 지표 계산 (README 6.1~6.3, docs/decisions.md D9, D14). 기본 연도는 2025. 점수(0~100 변환)는 아직 하지 않는다.
 
 입력 상태 → 계산 상태:
   mapped                → normal     (정상 계산)
@@ -106,9 +106,9 @@ def avg(a: Decimal, b: Decimal) -> Decimal:
 # ---------------------------------------------------------------- 6.1 재무 안정성·현금창출
 
 
-def ocf_to_avg_assets(get) -> Result:
-    ocf, ta0, ta1 = get("operating_cash_flow", 2025), get("total_assets", 2024), get("total_assets", 2025)
-    r = combine(Result("ocf_to_avg_assets", "OCF / 평균 총자산", "2025 (평균: 2024말·2025말)"), [ocf, ta0, ta1])
+def ocf_to_avg_assets(get, y: int = 2025) -> Result:
+    ocf, ta0, ta1 = get("operating_cash_flow", y), get("total_assets", y - 1), get("total_assets", y)
+    r = combine(Result("ocf_to_avg_assets", "OCF / 평균 총자산", f"{y} (평균: {y - 1}말·{y}말)"), [ocf, ta0, ta1])
     if r.calc_status != "not_computed":
         a = avg(ta0.value, ta1.value)
         if a <= 0:
@@ -119,9 +119,9 @@ def ocf_to_avg_assets(get) -> Result:
     return r
 
 
-def debt_ratio(get) -> Result:
-    tl, ta = get("total_liabilities", 2025), get("total_assets", 2025)
-    r = combine(Result("debt_ratio", "부채/자산 비율 (총부채 ÷ 총자산)", "2025말"), [tl, ta])
+def debt_ratio(get, y: int = 2025) -> Result:
+    tl, ta = get("total_liabilities", y), get("total_assets", y)
+    r = combine(Result("debt_ratio", "부채/자산 비율 (총부채 ÷ 총자산)", f"{y}말"), [tl, ta])
     if r.calc_status != "not_computed":
         if ta.value <= 0:
             r.calc_status, r.score_eligible = "not_computed", "보류"
@@ -131,9 +131,9 @@ def debt_ratio(get) -> Result:
     return r
 
 
-def interest_coverage(get) -> Result:
-    oi, ie = get("operating_income", 2025), get("interest_expense", 2025)
-    r = combine(Result("interest_coverage", "이자보상배율 (리스 이자 포함 기준)", "2025"), [oi, ie])
+def interest_coverage(get, y: int = 2025) -> Result:
+    oi, ie = get("operating_income", y), get("interest_expense", y)
+    r = combine(Result("interest_coverage", "이자보상배율 (리스 이자 포함 기준)", str(y)), [oi, ie])
     if r.calc_status != "not_computed":
         if ie.value == 0:
             # 확인된 이자비용 0은 별도 상태 (무한대로 처리하지 않는다)
@@ -144,15 +144,15 @@ def interest_coverage(get) -> Result:
     return r
 
 
-def current_ratios(get) -> list[Result]:
+def current_ratios(get, y: int = 2025) -> list[Result]:
     """점수 정의는 매각예정항목 포함 유동비율, 보고값 기준 유동비율은 조회용."""
     out = []
     for metric, label, ca_key, cl_key, eligible_if_normal in (
         ("current_ratio_hfs", "유동비율 (매각예정항목 포함)", "adjusted_current_assets", "adjusted_current_liabilities", "가능"),
         ("current_ratio_reported", "유동비율 (보고값 기준, 조회용)", "current_assets", "current_liabilities", "아니오 — 조회용"),
     ):
-        ca, cl = get(ca_key, 2025), get(cl_key, 2025)
-        r = combine(Result(metric, label, "2025말"), [ca, cl])
+        ca, cl = get(ca_key, y), get(cl_key, y)
+        r = combine(Result(metric, label, f"{y}말"), [ca, cl])
         if r.calc_status != "not_computed":
             if cl.value == 0:
                 # 비율 계산 불가. 조건부 점수(README 7.1 C)는 아직 구현하지 않았으므로 점수도 보류
@@ -166,9 +166,9 @@ def current_ratios(get) -> list[Result]:
     return out
 
 
-def cash_to_short_term_debt(get) -> Result:
-    cash, debt = get("cash", 2025), get("short_term_interest_bearing_debt", 2025)
-    r = combine(Result("cash_to_short_term_debt", "현금 / 단기 이자부채 (리스 포함)", "2025말"), [cash, debt])
+def cash_to_short_term_debt(get, y: int = 2025) -> Result:
+    cash, debt = get("cash", y), get("short_term_interest_bearing_debt", y)
+    r = combine(Result("cash_to_short_term_debt", "현금 / 단기 이자부채 (리스 포함)", f"{y}말"), [cash, debt])
     if r.calc_status != "not_computed":
         if debt.value == 0:
             r.calc_status, r.score_eligible = "not_computed", "보류"
@@ -209,12 +209,25 @@ def growth_volatility(get) -> Result:
     return r
 
 
+def revenue_yoy_growth(get, y: int = 2025) -> Result:
+    """추세 비교용 (D14). 점수 정의에는 없다 — 성장 점수는 3년 CAGR·변동성이 맡는다."""
+    r0, r1 = get("revenue", y - 1), get("revenue", y)
+    r = combine(Result("revenue_yoy_growth", "전년 대비 매출 증가율", f"{y - 1}→{y}"), [r0, r1])
+    if r.calc_status != "not_computed":
+        if r0.value <= 0:
+            r.calc_status, r.score_eligible = "not_computed", "보류"
+            r.hold_reasons.append("전년 매출 ≤ 0 — 미사용")
+        else:
+            r.value = float(r1.value / r0.value) - 1
+    return r
+
+
 # ---------------------------------------------------------------- 6.3 운영 경쟁력 (자체 원시값)
 
 
-def operating_margin(get) -> Result:
-    oi, rev = get("operating_income", 2025), get("revenue", 2025)
-    r = combine(Result("operating_margin", "영업이익률", "2025"), [oi, rev])
+def operating_margin(get, y: int = 2025) -> Result:
+    oi, rev = get("operating_income", y), get("revenue", y)
+    r = combine(Result("operating_margin", "영업이익률", str(y)), [oi, rev])
     if r.calc_status != "not_computed":
         if rev.value <= 0:
             r.calc_status, r.score_eligible = "not_computed", "보류"
@@ -224,9 +237,9 @@ def operating_margin(get) -> Result:
     return r
 
 
-def roa(get) -> Result:
-    ni, ta0, ta1 = get("net_income", 2025), get("total_assets", 2024), get("total_assets", 2025)
-    r = combine(Result("roa", "ROA (순이익/평균 총자산)", "2025 (평균: 2024말·2025말)"), [ni, ta0, ta1])
+def roa(get, y: int = 2025) -> Result:
+    ni, ta0, ta1 = get("net_income", y), get("total_assets", y - 1), get("total_assets", y)
+    r = combine(Result("roa", "ROA (순이익/평균 총자산)", f"{y} (평균: {y - 1}말·{y}말)"), [ni, ta0, ta1])
     if r.calc_status != "not_computed":
         a = avg(ta0.value, ta1.value)
         if a <= 0:
@@ -237,9 +250,9 @@ def roa(get) -> Result:
     return r
 
 
-def inventory_turnover(get) -> Result:
-    cogs, inv0, inv1 = get("cost_of_sales", 2025), get("inventory", 2024), get("inventory", 2025)
-    r = combine(Result("inventory_turnover", "재고회전율 (매출원가/평균 재고)", "2025 (평균: 2024말·2025말)"), [cogs, inv0, inv1])
+def inventory_turnover(get, y: int = 2025) -> Result:
+    cogs, inv0, inv1 = get("cost_of_sales", y), get("inventory", y - 1), get("inventory", y)
+    r = combine(Result("inventory_turnover", "재고회전율 (매출원가/평균 재고)", f"{y} (평균: {y - 1}말·{y}말)"), [cogs, inv0, inv1])
     if r.calc_status != "not_computed":
         a = avg(inv0.value, inv1.value)
         if a <= 0:
@@ -252,6 +265,25 @@ def inventory_turnover(get) -> Result:
 
 OWN_METRICS = [ocf_to_avg_assets, debt_ratio, interest_coverage, current_ratios, cash_to_short_term_debt,
                revenue_cagr_3y, growth_volatility, operating_margin, roa, inventory_turnover]
+
+# 연도별 추세 비교에 쓰는 단년 지표 함수 (D14). current_ratios는 두 지표(매각예정 포함·보고값)를 낸다
+TREND_METRICS = [ocf_to_avg_assets, debt_ratio, interest_coverage, current_ratios, cash_to_short_term_debt,
+                 revenue_yoy_growth, operating_margin, roa, inventory_turnover]
+# 지표별 입력 계정 — 재분류·표시 범위 변경 검토(mismatch_reviews)를 지표에 연결할 때 쓴다
+METRIC_ACCOUNTS = {
+    "ocf_to_avg_assets": {"operating_cash_flow", "total_assets"},
+    "debt_ratio": {"total_liabilities", "total_assets"},
+    "interest_coverage": {"operating_income", "interest_expense"},
+    # 유동자산(보고)의 매각예정 포함 여부 차이(M03 등)는 조정값이 흡수하므로 current_assets는 넣지 않는다.
+    # 조정 유동부채 = 유동부채(보고) + 매각예정부채라 유동부채 재분류(M01)는 그대로 영향을 준다
+    "current_ratio_hfs": {"adjusted_current_assets", "adjusted_current_liabilities", "current_liabilities"},
+    "current_ratio_reported": {"current_assets", "current_liabilities"},
+    "cash_to_short_term_debt": {"cash", "short_term_interest_bearing_debt"},
+    "revenue_yoy_growth": {"revenue"},
+    "operating_margin": {"operating_income", "revenue"},
+    "roa": {"net_income", "total_assets"},
+    "inventory_turnover": {"cost_of_sales", "inventory"},
+}
 
 # 비교군 기준 지표: (이름, 표시, 바탕 지표, 방식) — 방식 diff = 값 − 중앙값, ratio = 값 ÷ 중앙값
 PEER_METRICS = [

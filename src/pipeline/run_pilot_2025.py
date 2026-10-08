@@ -1,6 +1,6 @@
 """파일럿 2025 분석 실행 + 실행 기록: python -m src.pipeline.run_pilot_2025 [기준일 YYYYMMDD]
 
-관측값 → 계정 점검표 → 지표 → 점수·커버리지를 한 번에 실행하고, 결과를 실행 기록과 함께
+관측값 → 계정 점검표 → 지표 → 점수·커버리지 → 2022~2025 회고 추세(참고 표시, D14)를 한 번에 실행하고, 결과를 실행 기록과 함께
 data/interim/runs/{run_id}/에 저장한다 (D12). data/interim/의 최신 파일도 갱신한다.
 실행 기록: 기준일, 기업·연도별 선택 보고서·스냅샷·응답 해시·경고, 코드 커밋, 규칙·비교군·수기 확인표 버전과 해시, 출력 해시.
 """
@@ -16,7 +16,7 @@ import pandas as pd
 import yaml
 
 from src.collectors.dart import new_run_id
-from src.metrics import run_2025
+from src.metrics import run_2025, run_trend
 from src.normalization import build_account_check, build_facts as build_facts_cli
 from src.normalization.build_facts import INTERIM, RAW, ROOT
 from src.normalization.dart_facts import build_facts, load_filings
@@ -24,8 +24,8 @@ from src.normalization.selection import load_published_filings, select_snapshot
 from src.scoring.score import coverage, score_row
 
 SCORING_FILE = "scoring_v2.yaml"  # v1은 보존 (제안, 반례로 대체됨)
-CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE]
-MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv"]
+CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE, "trend_v1.yaml"]
+MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv", "hfs_confirmations.csv"]
 
 
 def sha256_file(path) -> str:
@@ -83,8 +83,11 @@ def main(as_of: str) -> None:
     scores.to_csv(INTERIM / "scores_2025.csv", index=False, encoding="utf-8-sig")
     cover.to_csv(INTERIM / "coverage_2025.csv", index=False, encoding="utf-8-sig")
 
-    # 3) 실행 기록: 무엇으로 이 결과를 만들었나
+    # 3) 2022~2025 회고 추세 — 참고 표시만, 점수·커버리지에 반영하지 않음. 2025 값·상태가 위 결과와 다르면 중단 (D14)
     rows, snaps = build_facts(RAW)
+    run_trend.main(as_of, rows, snaps)
+
+    # 4) 실행 기록: 무엇으로 이 결과를 만들었나
     filings, published = load_filings(RAW), load_published_filings(RAW)
     snap_by_id = {s["snapshot_id"]: s for s in snaps}
     selections = []
@@ -95,7 +98,8 @@ def main(as_of: str) -> None:
                            "note": sel.note, "warnings": sel.warnings})
     basis = yaml.safe_load((ROOT / "configs" / "basis_v1.yaml").read_text(encoding="utf-8"))
     outputs = {}
-    for name in ["dart_facts.csv", "account_check.csv", "metrics_2025.csv", "scores_2025.csv", "coverage_2025.csv"]:
+    for name in ["dart_facts.csv", "account_check.csv", "metrics_2025.csv", "scores_2025.csv", "coverage_2025.csv",
+                 "trend_baseline_2021.csv", "trend_2022_2025.csv", "working_capital_2022_2025.csv"]:
         shutil.copy2(INTERIM / name, out / name)
         outputs[name] = sha256_file(out / name)
     manifest = {

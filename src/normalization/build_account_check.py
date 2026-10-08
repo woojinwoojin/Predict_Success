@@ -17,7 +17,7 @@ from src.normalization.bs_sections import held_for_sale_adjustment
 from src.normalization.build_facts import INTERIM, RAW, ROOT
 from src.normalization.selection import load_published_filings, select_snapshot
 from src.normalization.dart_facts import build_facts, load_filings, mismatch_kind, same_period_mismatches
-from src.normalization.manual import apply_confirmations, load_confirmations
+from src.normalization.manual import apply_confirmations, apply_hfs_confirmation, load_confirmations, load_hfs_confirmations
 
 MANUAL = ROOT / "data" / "manual"
 
@@ -39,6 +39,7 @@ def main(as_of: str) -> None:
     # 보고서 당기의 종료일 (수기 확인값·불일치 검토를 같은 기간에 연결할 때 쓴다)
     current_end = {sid: Counter(r["period_end"] for r in rs if r["period_end"]).most_common(1)[0][0] for sid, rs in by_snapshot.items()}
     confirmations = load_confirmations(MANUAL / "note_confirmations.csv")
+    hfs_confirmations = load_hfs_confirmations(MANUAL / "hfs_confirmations.csv")
     reviews = pd.read_csv(MANUAL / "mismatch_reviews.csv", dtype=str, encoding="utf-8-sig") if (MANUAL / "mismatch_reviews.csv").exists() else pd.DataFrame()
 
     all_labels = {n: spec["label"] for n, spec in config["accounts"].items()} | {n: label for n, (_, label) in ADJUSTED.items()}
@@ -65,12 +66,14 @@ def main(as_of: str) -> None:
             evidence_rows += [{**key, "canonical_account": m["canonical_account"], **e} for e in m["evidence"]]
         for name, (kind, label) in ADJUSTED.items():
             adj = held_for_sale_adjustment(by_snapshot.get(snapshot_id, []), kind)
+            adj = apply_hfs_confirmation(adj, hfs_confirmations, key, kind, selected, end)  # 금액 결측의 원문 확인 (D14)
             # 포함·해당 없음이면 조정값 = 보고값. 미포함 판정은 산술(보조 검증)만으로 나온 것이라 원문 확인 전에는 후보값 (D9)
             status = {"확인 필요": "review_needed", "미포함": "candidate"}.get(adj["included"], "mapped")
             results.append({**key, "report_period_end": end, "canonical_account": name, "label": label, "basis": "매각예정항목 포함",
                             "status": status, "value": adj["adjusted"], "reported_value": adj["reported"], "held_for_sale": adj["held_for_sale"],
                             "held_for_sale_included": adj["included"], "note": adj["evidence"] or f"매각예정 {adj['included']}",
-                            "extraction_method": "api_rule+adjustment" if adj["included"] == "미포함" else ("api_rule" if status == "mapped" else ""),
+                            "extraction_method": "api_rule+adjustment" if adj["included"] == "미포함" else (
+                                "api_rule+manual" if adj["evidence"].startswith("원문 확인 ") else "api_rule" if status == "mapped" else ""),
                             **adj["period"], "mismatch_review": "", "selection_note": sel.note, "rcept_no": selected, "snapshot_id": snapshot_id})
 
     # 분석 입력 키(기업·재무기준·연도·계정)는 유일해야 한다

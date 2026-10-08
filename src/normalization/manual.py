@@ -83,6 +83,46 @@ def apply_confirmations(result: dict, entries: list[dict], key: dict, selected_r
                                             result.get("note") if result["status"] != "mapped" else ""]))}
 
 
+HFS_REQUIRED = ["confirmation_id", "corp_code", "fs_div", "kind", "period_end", "rcept_no", "confirmed_amount", "source_location",
+                "evidence", "status", "method"]
+
+
+def load_hfs_confirmations(path: Path) -> list[dict]:
+    """매각예정 금액 결측의 원문 확인표 (data/manual/hfs_confirmations.csv, D14)."""
+    if not path.exists():
+        return []
+    table = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    missing = [c for c in HFS_REQUIRED if c not in table.columns]
+    if missing:
+        raise ValueError(f"매각예정 확인표에 열이 없습니다: {missing}")
+    rows = table.to_dict("records")
+    for r in rows:
+        if r["status"] == "confirmed" and not (r["source_location"].strip() and r["evidence"].strip()):
+            raise ValueError(f"{r['confirmation_id']}: 확인된 값에는 원문 위치와 근거가 필요합니다")
+    return rows
+
+
+def apply_hfs_confirmation(adj: dict, entries: list[dict], key: dict, kind: str, selected_rcept: str, period_end: str | None) -> dict:
+    """매각예정 행의 금액 결측만 원문 확인으로 해소한다 (D14).
+
+    - 같은 기업·재무기준·종류·기간·선택 보고서의 확인값만 쓴다. 다른 연도·보고서의 확인을 옮겨 쓰지 않는다
+    - 확인 금액 0(원문 '-'·주석 잔액 없음)이면 '해당 없음'으로 바꾸고 조정값 = 보고값
+    - 0이 아닌 금액은 포함 여부를 다시 확인해야 하므로 확인 필요를 유지한다
+    - 음수 잔액 등 결측이 아닌 확인 필요(I01)는 건드리지 않는다
+    """
+    if adj["included"] != "확인 필요" or not adj["evidence"].startswith("매각예정 행은 있으나 금액 결측"):
+        return adj
+    usable = [e for e in entries if e["corp_code"] == key["corp_code"] and e["fs_div"] == key["fs_div"] and e["kind"] == kind
+              and e["period_end"] == period_end and e["rcept_no"] == selected_rcept and e["status"] == "confirmed"]
+    if len(usable) != 1:
+        return adj if not usable else {**adj, "evidence": adj["evidence"] + f"; 확인표 항목이 여러 개: {[e['confirmation_id'] for e in usable]}"}
+    e = usable[0]
+    if Decimal(e["confirmed_amount"]) != 0:
+        return {**adj, "evidence": adj["evidence"] + f"; 원문 확인 {e['confirmation_id']}: 금액 {e['confirmed_amount']} — 포함 여부 확인 전 조정하지 않음"}
+    return {**adj, "included": "해당 없음", "held_for_sale": "0", "adjusted": adj["reported"],
+            "evidence": f"원문 확인 {e['confirmation_id']}: API 금액 결측 → 원문 잔액 없음(0). {e['evidence']} [{e['source_location']}]"}
+
+
 def manual_period(entry: dict) -> dict:
     """수기 확인값의 기간. 확인표에 적힌 기간을 그대로 계산 단계로 넘긴다 (D11 ⑥)."""
     start, end, ptype = entry.get("period_start") or None, entry.get("period_end") or None, entry.get("period_type")
