@@ -16,6 +16,7 @@ import pandas as pd
 import yaml
 
 from src.collectors.dart import new_run_id
+from src.market import run_market
 from src.metrics import run_2025, run_trend
 from src.normalization import build_account_check, build_facts as build_facts_cli
 from src.normalization.build_facts import INTERIM, RAW, ROOT
@@ -24,8 +25,9 @@ from src.normalization.selection import load_published_filings, select_snapshot
 from src.scoring.score import coverage, score_row
 
 SCORING_FILE = "scoring_v2.yaml"  # v1은 보존 (제안, 반례로 대체됨)
-CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE, "trend_v1.yaml"]
-MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv", "hfs_confirmations.csv", "cf_activity_reviews.csv"]
+CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE, "trend_v1.yaml", "market_v1.yaml"]
+MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv", "hfs_confirmations.csv", "cf_activity_reviews.csv",
+          "market_stat_candidates.csv", "company_scope_facts.csv", "market_links.csv"]
 
 
 def sha256_file(path) -> str:
@@ -87,6 +89,9 @@ def main(as_of: str) -> None:
     rows, snaps = build_facts(RAW)
     run_trend.main(as_of, rows, snaps)
 
+    # 3-1) 시장 통계 연결 — 점수 미반영 (D18)
+    market_raw = run_market.main(as_of)
+
     # 4) 실행 기록: 무엇으로 이 결과를 만들었나
     filings, published = load_filings(RAW), load_published_filings(RAW)
     snap_by_id = {s["snapshot_id"]: s for s in snaps}
@@ -99,7 +104,8 @@ def main(as_of: str) -> None:
     basis = yaml.safe_load((ROOT / "configs" / "basis_v1.yaml").read_text(encoding="utf-8"))
     outputs = {}
     for name in ["dart_facts.csv", "account_check.csv", "metrics_2025.csv", "scores_2025.csv", "coverage_2025.csv",
-                 "trend_baseline_2021.csv", "trend_2022_2025.csv", "working_capital_2022_2025.csv"]:
+                 "trend_baseline_2021.csv", "trend_2022_2025.csv", "working_capital_2022_2025.csv",
+                 "market_stats_2021_2025.csv", "market_summary_2021_2025.csv", "market_links.csv"]:
         shutil.copy2(INTERIM / name, out / name)
         outputs[name] = sha256_file(out / name)
     manifest = {
@@ -113,7 +119,7 @@ def main(as_of: str) -> None:
         "manual_tables": {m: {"sha256": sha256_file(ROOT / "data" / "manual" / m),
                               "rows": len(pd.read_csv(ROOT / "data" / "manual" / m, dtype=str, encoding="utf-8-sig"))} for m in MANUAL},
         "raw": {"snapshots": len(snaps), "stored_filings": sum(1 for f in filings.values() if f["link"] == "stored"),
-                "published_filings": len(published)},
+                "published_filings": len(published), "market_statistics": market_raw},
         "selections": selections,
         "selection_warnings": [w for s in selections for w in s["warnings"]],
         "outputs": outputs,

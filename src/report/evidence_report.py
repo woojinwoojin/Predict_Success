@@ -191,6 +191,20 @@ class Evidence:
         return f"API 간 대조 — 일부 행만 대조 (나머지: {'; '.join(dict.fromkeys(missing))})" + note
 
 
+def market_answer(corp: str, as_of: str) -> str:
+    """질문 ①: 시장 통계 연결 결과(D18)를 그대로 옮긴다. 결과 파일이 없으면 보류."""
+    if not (INTERIM / "market_links.csv").exists():
+        return "| ① 시장이 숫자로 성장하는가 | **보류** | 시장 통계 연결 결과 없음 (src.market.run_market) |"
+    links = read("market_links.csv")
+    links = links[(links.corp_code == corp) & (links.candidate_id == "M01")]
+    summary = read("market_summary_2021_2025.csv")
+    cagr = "; ".join(f"{r.span} 연평균 {float(r.cagr) * 100:.1f}%" for r in summary.itertuples() if r.cagr)
+    judge = f"{links.judgement.iloc[0]} — {links.differences.iloc[0]}" if not links.empty else "연결 판정 없음"
+    return (f"| ① 시장이 숫자로 성장하는가 | **부분 답변** | 국내 화장품 생산금액(책임판매업체 보고, 명목)의 회고 추세만 제시: {cagr} "
+            f"(시작 연도에 민감, 2021→2022 -18.4% 원인 미확인). 이 회사와의 연결: **{esc(judge)}**. "
+            f"글로벌 수요·ODM 시장 성장률이 아니며 점수 미반영 — `market_stats_{as_of}.md` |")
+
+
 def cash_note(raw: dict, wc: pd.DataFrame, years: list[int]) -> str:
     """최근 두 해의 영업이익·영업현금흐름 방향과 운전자본 소계를 기존 결과로만 서술한다 (원인을 확정하지 않음)."""
     a, b = years[-2], years[-1]
@@ -410,7 +424,7 @@ def main(corp: str = "00763473") -> str:
     raw = {(a, int(y)): v for a, y, v, s in zip(check.canonical_account, check.bsns_year, check.value, check.status) if s == "mapped"}
     w("| 질문 | 상태 | 지금의 답 또는 보류 사유 |")
     w("|---|---|---|")
-    w("| ① 시장이 숫자로 성장하는가 | **보류** | 시장·외부환경 지표(README 6.4) 미구현 — 대응 산업 통계(KOSIS) 연결 전 |")
+    w(market_answer(corp, as_of))
     gap = scores[scores.metric.isin(["growth_gap", "operating_margin_gap", "roa_gap", "inventory_turnover_rel"])]
     w("| ② 비슷한 경쟁사보다 성장성·운영 효율이 좋은가 | **부분 — 검증용** | 원시 지표(성장률·영업이익률·ROA·재고회전율)는 위 표에 있다. "
       f"비교군 기준 지표 {len(gap)}개는 파일럿 비교군(평가기업 제외 3개사, n < 20)이라 계산 검증용으로만 표시하고 점수에 넣지 않는다 |")
