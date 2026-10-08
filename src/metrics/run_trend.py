@@ -134,6 +134,7 @@ def main(as_of: str, rows: list[dict] | None = None, snaps: list[dict] | None = 
     check = pd.read_csv(INTERIM / "account_check.csv", dtype=str, keep_default_na=False)
     scope = pd.read_csv(MANUAL / "scope_changes.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
     reviews = pd.read_csv(MANUAL / "mismatch_reviews.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    activity_reviews = pd.read_csv(MANUAL / "cf_activity_reviews.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig").to_dict("records")
     if rows is None:
         rows, snaps = build_facts(RAW)
     filings, published = load_filings(RAW), load_published_filings(RAW)
@@ -159,7 +160,7 @@ def main(as_of: str, rows: list[dict] | None = None, snaps: list[dict] | None = 
             # 운전자본 변동 (선택 보고서 당기 열의 현금흐름표)
             snap = check[(check.corp_code == corp) & (check.fs_div == fs) & (check.bsns_year == str(y))].snapshot_id
             snapshot_id = snap.iloc[0] if len(snap) and snap.iloc[0] else None
-            wc = working_capital(cf_by_snapshot.get(snapshot_id, []), avg_assets(get, y), threshold)
+            wc = working_capital(cf_by_snapshot.get(snapshot_id, []), avg_assets(get, y), threshold, activity_reviews)
             scope_y = scope_reasons(scope, corp, fs, y)
             wc_rows.append({"title": cfg["title"], "as_of": as_of, "company": spec["name"], "corp_code": corp, "year": y,
                             "basis": BASIS_KO[fs], **wc, "scope_change": " | ".join(x.text for x in scope_y) or ("변동 없음" if fs == "CFS" else "해당 없음 — 별도 기준"),

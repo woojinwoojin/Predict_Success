@@ -120,7 +120,7 @@ def map_account(name: str, spec: dict, rows: list[dict], config: dict) -> dict:
                 "note": "; ".join(["본문 규칙에 맞는 행 없음, 확인 필요 후보: " + ", ".join(sorted({r["account_nm"] for r, _ in reviews}))] + notes)}
     if spec.get("absent_ok"):
         return {**base, "status": "not_applicable", "value": None, "evidence": ev, "note": "; ".join(["해당 행 없음"] + notes)}
-    return {**base, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join(["해당 계정 행 없음 — 원문 확인"] + notes)}
+    return {**base, "status": "review_needed", "value": None, "evidence": ev, "note": "; ".join([f"API에서 계산용 {spec['label']} 값을 확보하지 못함 — 원문·주석 확인 필요 (회사에 해당 금액이 없다는 뜻 아님)"] + notes)}
 
 
 def map_report(rows: list[dict], config: dict) -> list[dict]:

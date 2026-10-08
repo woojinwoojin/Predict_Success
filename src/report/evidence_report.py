@@ -33,8 +33,9 @@ ACCOUNT_KO = {"revenue": "매출", "cost_of_sales": "매출원가", "operating_i
               "adjusted_current_liabilities": "유동부채(매각예정 포함)"}
 
 
-STATUS_KO = {"mapped": "정상", "candidate": "후보값", "review_needed": "확인 필요", "empty_value": "값 없음", "no_data": "자료 없음",
-             "held": "보류", "not_applicable": "해당 없음", "없음": "없음"}
+# 계산 입력 상태 — 매핑·계산에 쓸 수 있는지. 원문 검증 여부와 다르다 (D16)
+STATUS_KO = {"mapped": "정상", "candidate": "참고 (후보값)", "review_needed": "계산 안 함 (확인 필요)", "empty_value": "계산 안 함 (값 없음)",
+             "no_data": "계산 안 함 (자료 없음)", "held": "계산 안 함 (보류)", "not_applicable": "해당 없음", "없음": "없음"}
 
 
 def esc(text) -> str:
@@ -68,11 +69,17 @@ def latest_run() -> tuple[str, dict, list[str]]:
     return manifest["run_id"], manifest, problems
 
 
+EMPTY = {"value": "", "status": "없음", "report": "", "where": "", "method": "", "link": "", "verify": "미대조", "where_basis": ""}
+
+
 class Evidence:
     """근거 레지스트리: 계정·연도마다 근거 ID 하나 (접수번호 → 원문 위치)."""
 
-    def __init__(self, corp: str, fs: str, published: dict):
-        self.corp, self.fs, self.published = corp, fs, published
+    def __init__(self, corp: str, fs: str, published: dict, as_of: str):
+        self.corp, self.fs, self.published, self.as_of = corp, fs, published, as_of
+        facts = read("dart_facts.csv")
+        self.facts = facts[(facts.corp_code == corp) & (facts.fs_div == fs) & (facts.value_status == "parsed")]
+        self.fact_by_id = self.facts.set_index("row_id")
         check = read("account_check.csv")
         self.check = check[(check.corp_code == corp) & (check.fs_div == fs)]
         ev = read("account_check_evidence.csv")
@@ -106,26 +113,36 @@ class Evidence:
         if year == 2021:
             b = self.base[self.base.canonical_account == account]
             if b.empty:
-                return {"value": "", "status": "없음", "report": "", "where": "", "method": "", "link": ""}
+                return {**EMPTY}
             b = b.iloc[0]
+            verify = {"일치": "API 간 대조 — 다른 보고서와 일치", "불일치": "API 간 대조 — 불일치"}.get(b.cross_check, "미대조")
             return {"value": b.value, "status": b.status, "report": self.report_name(b.rcept_no),
                     "where": f"{self.section('CIS' if account == 'revenue' else 'BS')} > 전기 열. {b.note}",
-                    "method": f"{b.extraction_method} — 2021 기초값 예외 (2022 보고서 전기 열), 다른 보고서 대조 결과 '{b.cross_check}'",
+                    "method": f"{b.extraction_method} — 2021 기초값 예외 (2022 보고서 전기 열)",
+                    "verify": verify, "where_basis": "API 정보로 구성",
                     "link": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={b.rcept_no}"}
         c = self.check[(self.check.canonical_account == account) & (self.check.bsns_year == str(year))]
         if c.empty:
-            return {"value": "", "status": "없음", "report": "", "where": "", "method": "", "link": ""}
+            return {**EMPTY}
         c = c.iloc[0]
         rcept = c.rcept_no
         out = {"value": c.value, "status": c.status, "report": self.report_name(rcept), "method": c.extraction_method or "—",
+               "verify": "미대조 — 계산용 값 없음" if c.status not in ("mapped", "candidate") else "미대조", "where_basis": "API 정보로 구성",
                "link": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept}"}
         manual = self.notes[(self.notes.canonical_account == account) & (self.notes.rcept_no == rcept)
                             & (self.notes.period_end.str[:4] == str(year))]
         if "manual" in (c.extraction_method or "") and not manual.empty:
             m = manual.iloc[0]
-            return {**out, "where": f"수기 확인 {m.confirmation_id}: {m.source_location} (금액 {m.amount_check}, 범위 {m.scope_check or '—'}, 구성 {m.component_check or '—'})"}
+            return {**out, "verify": f"직접 대조 — 수기 확인 {m.confirmation_id}", "where_basis": "원문에서 확인",
+                    "where": f"수기 확인 {m.confirmation_id}: {m.source_location} (금액 {m.amount_check}, 범위 {m.scope_check or '—'}, 구성 {m.component_check or '—'})"}
         if account.startswith("adjusted_"):
-            return {**out, "where": f"보고 소계 + 매각예정 조정: {c.held_for_sale_included or ''} — {c.note}"}
+            hfs_direct = c.extraction_method == "api_rule+manual"
+            base_account = "current_assets" if account == "adjusted_current_assets" else "current_liabilities"
+            base_verify = self._cross_check(self.ev[(self.ev.canonical_account == base_account) & (self.ev.bsns_year == str(year))
+                                                    & (self.ev.kind == "match")])
+            return {**out, "where": f"보고 소계 + 매각예정 조정: {c.held_for_sale_included or ''} — {c.note}",
+                    "verify": (f"매각예정 0은 직접 대조({c.note.split(':')[0].replace('원문 확인 ', '')}), 소계는 " if hfs_direct else "소계: ") + base_verify,
+                    "where_basis": "매각예정은 원문에서 확인, 소계는 API 정보로 구성" if hfs_direct else "API 정보로 구성"}
         ev = self.ev[(self.ev.canonical_account == account) & (self.ev.bsns_year == str(year)) & (self.ev.kind == "match")]
         if ev.empty:
             return {**out, "where": c.note}
@@ -136,7 +153,56 @@ class Evidence:
         where = f"{self.section(ev.iloc[0].sj_div)} > " + " + ".join(parts)
         if c.status != "mapped":
             where += f" — {c.note}"
-        return {**out, "where": where}
+        return {**out, "where": where, "verify": self._cross_check(ev), "where_basis": "API 정보로 구성"}
+
+    def _cross_check(self, ev: pd.DataFrame) -> str:
+        """사용한 API 행을 기준일 이전에 공개된 다른 보고서의 같은 기간 값(다음 해 보고서의 전기 열 등)과 대조한다.
+
+        원문을 직접 본 것이 아니라 API 응답끼리의 대조다."""
+        if ev.empty:
+            return "미대조"
+        results = []
+        for r in ev.itertuples():
+            if r.row_id not in self.fact_by_id.index:
+                return "미대조"
+            f = self.fact_by_id.loc[r.row_id]
+            same = self.facts[(self.facts.rcept_no != f.rcept_no) & (self.facts.sj_div == f.sj_div) & (self.facts.account_id == f.account_id)
+                              & (self.facts.account_detail == f.account_detail) & (self.facts.account_nm == f.account_nm)
+                              & (self.facts.period_end == f.period_end)]
+            same = same[[self.published.get(x, {}).get("rcept_dt", "99999999") <= self.as_of for x in same.rcept_no]]
+            if same.empty:
+                results.append(None)
+            else:
+                results.append(all(Decimal(v) == Decimal(f.value) for v in same.value))
+        if any(x is False for x in results):
+            return "API 간 대조 — 불일치 (다른 보고서 값과 다름)"
+        if results and all(x is True for x in results):
+            return "API 간 대조 — 다음 보고서 비교 열과 일치"
+        return "미대조 — 같은 기간을 담은 다른 보고서 없음" if all(x is None for x in results) else "API 간 대조 — 일부 행만 대조"
+
+
+def cash_note(raw: dict, wc: pd.DataFrame, years: list[int]) -> str:
+    """최근 두 해의 영업이익·영업현금흐름 방향과 운전자본 소계를 기존 결과로만 서술한다 (원인을 확정하지 않음)."""
+    a, b = years[-2], years[-1]
+    oi = [raw.get(("operating_income", y)) for y in (a, b)]
+    ocf = [raw.get(("operating_cash_flow", y)) for y in (a, b)]
+    if None in oi or None in ocf:
+        return ""
+    word = lambda x0, x1: "증가" if Decimal(x1) > Decimal(x0) else "감소" if Decimal(x1) < Decimal(x0) else "변화 없음"
+    w_rows = wc.set_index("year")
+    wc_text = "; ".join(f"{y} {eok(w_rows.loc[str(y)].wc_amount)} (검산 {w_rows.loc[str(y)].sign_status})"
+                        for y in (a, b) if str(y) in w_rows.index and w_rows.loc[str(y)].wc_amount)
+    unchecked = [str(y) for y in (a, b) if str(y) not in w_rows.index or w_rows.loc[str(y)].sign_status != "산술 일치"]
+    text = (f"{a}→{b}년 영업이익은 {eok(oi[0])}에서 {eok(oi[1])}으로 {word(*oi)}했지만, 영업현금흐름은 {eok(ocf[0])}에서 {eok(ocf[1])}으로 {word(*ocf)}했다"
+            if word(*oi) != word(*ocf) else
+            f"{a}→{b}년 영업이익은 {eok(oi[0])}에서 {eok(oi[1])}으로, 영업현금흐름은 {eok(ocf[0])}에서 {eok(ocf[1])}으로 함께 {word(*oi)}했다")
+    text += f". 운전자본 변동 소계: {wc_text}"
+    if unchecked:
+        text += f". {'·'.join(unchecked)}년 검산이 미완료라 차이의 원인을 운전자본으로 확정하지 않는다"
+    else:
+        text += (". 두 해 모두 소계 부호의 산술적 일관성은 확인됐지만, 구성·일회성 여부는 확인하지 않았으므로 "
+                 "영업현금흐름 변화의 원인을 운전자본 하나로 확정하지 않는다")
+    return esc(text + ".")
 
 
 def span_note(pairs: pd.DataFrame, metrics: list[str]) -> str:
@@ -179,14 +245,15 @@ def main(corp: str = "00763473") -> str:
     check = check[(check.corp_code == corp) & (check.fs_div == fs)]
     as_of = trend.as_of.iloc[0]
     run_id, manifest, run_problems = latest_run()
-    ev = Evidence(corp, fs, load_published_filings(RAW))
+    ev = Evidence(corp, fs, load_published_filings(RAW), as_of)
     years = [int(y) for y in trend_cfg["years"]]
 
     L = []
     w = L.append
     w(f"# {name} 증거 연결 보고서 — {trend_cfg['title']}")
     w("")
-    w("> 이 보고서는 새 계산을 하지 않고 파이프라인 결과만 모은 것이다. **점수·확률이 아니며, 종합점수는 보류 상태다** (5절).")
+    w("> 이 보고서는 기존 파이프라인 결과를 모은 것이다. 지표별 점수와 기여도는 채택된 미검증 규칙에 따른 계산 결과이며, "
+      "**종합점수와 성공확률은 제공하지 않는다** (5절).")
     w("")
     # ------------------------------------------------------------ 1
     w("## 1. 기준과 범위")
@@ -265,22 +332,44 @@ def main(corp: str = "00763473") -> str:
     w(f"출처: {trend_cfg['working_capital']['source']}. 규모 경고 기준 |변동| / 평균 총자산 ≥ "
       f"{trend_cfg['working_capital']['caution_threshold']:.0%} — **탐색용 초기 기준**(회계기준 값 아님), 점수·일회성 판정에 쓰지 않는다.")
     w("")
-    w("| 연도 | 금액 | 소계 존재 | 항등식 검산 (대상) | 현금흐름 영향 방향 | 구성·완전성 | 규모 경고 | 일회성 여부 |")
-    w("|---|---:|---|---|---|---|---|---|")
+    w("| 연도 | 금액 | 소계 존재 | 항등식 검산 | 활동 분류 확인 | 현금흐름 영향 방향 | 구성·완전성 | 규모 경고 | 일회성 여부 |")
+    w("|---|---:|---|---|---|---|---|---|---|")
     for r in wc.itertuples():
         share = f"{float(r.wc_to_avg_assets):.1%}" if r.wc_to_avg_assets else "—"
         caution = r.caution if r.caution_flag == "True" else f"기준 미만 ({share})" if r.wc_amount else r.caution
-        target = f" — 대상: {r.identity_target}" if r.identity_target else ""
-        w(f"| {r.year} | {eok(r.wc_amount)} | {esc(r.wc_status)} | {esc(r.sign_status + target)} | {esc(r.ocf_direction or '—')} | "
-          f"{'소계 1행만 사용 — 범위·완전성 미확인' if r.wc_amount else esc(r.completeness)} | {esc(caution)} | {r.one_off} |")
+        w(f"| {r.year} | {eok(r.wc_amount)} | {esc(r.wc_status)} | {esc(r.sign_status)} | {esc(r.activity_status or '—')} | "
+          f"{esc(r.ocf_direction or '—')} | {'소계 1행만 사용 — 범위·완전성 미확인' if r.wc_amount else esc(r.completeness)} | {esc(caution)} | {r.one_off} |")
     w("")
-    w("검산에 사용한 행 (같은 보고서 현금흐름표):")
+    w("'산술 일치'와 '활동 분류 확인'은 별도 상태다. 산술 일치는 아래 검산식이 원 단위로 맞는다는 뜻이고, 활동 분류 확인은 검산에 넣은 "
+      "이자·배당·법인세 행이 원문에서 실제로 영업활동 구간에 있는지다. 코드에 '영업활동' 구분이 없는 행은 원문 확인표"
+      "(`data/manual/cf_activity_reviews.csv`)에서 영업활동으로 확인된 경우에만 넣는다.")
+    conflicts = [c for c in wc.activity_conflicts if c]
+    if conflicts:
+        w("")
+        w("**API 코드와 원문 표시가 다른 행** — 원문 표시를 따르고 충돌을 기록한다 (배당·이자의 활동 분류는 회사의 회계정책에 따라 다를 수 있다):")
+        w("")
+        for c in conflicts:
+            for part in c.split("; "):
+                w(f"- {part}")
     w("")
+    w("**검산식 전개** (같은 보고서 현금흐름표, API 응답 순서는 원문 표의 줄 번호가 아님)")
     for r in wc.itertuples():
-        if r.identity_rows:
-            w(f"- {r.year}: {r.identity_rows} — {r.sign_evidence}")
-        elif r.wc_amount:
-            w(f"- {r.year}: 검증 미완료 — {r.sign_evidence}")
+        terms = json.loads(r.identity_terms) if r.identity_terms else []
+        if not terms:
+            if r.wc_amount:
+                w("")
+                w(f"*{r.year}* — {r.sign_status}: {r.sign_evidence}")
+            continue
+        w("")
+        w(f"*{r.year}* — 대상: {r.identity_target}")
+        w("")
+        w("| 항목 | 코드 (API 응답 순서) | API 값 | 적용 부호 | 부호 근거 | 적용 값 |")
+        w("|---|---|---:|:---:|---|---:|")
+        for t in terms:
+            w(f"| {esc(t['item'])} | {t['code']} ({t['api_order']}) | {Decimal(t['api_value']):,} | {t['sign']} | {esc(t['basis'])} | {Decimal(t['applied']):,} |")
+        w(f"| **합계** | | | | | **{Decimal(r.identity_total):,}** |")
+        w(f"| **대상: {esc(r.identity_target.split(' (')[0])}** | | | | | **{Decimal(r.identity_target_value):,}** |")
+        w(f"| **잔차 (대상 − 합계)** | | | | {r.sign_status} | **{Decimal(r.identity_residual):,}** |")
     w("")
     w("항등식이 맞으면 **운전자본 소계 부호의 산술적 일관성**이 확인된 것이다. '영업에서 창출된 현금'과 최종 영업현금흐름(OCF)은 다르며, "
       "그 사이에 이자·법인세 지급 등이 있다 — 그래서 검산 대상을 함께 적었다. 계정 범위·구성의 완전성·일회성 여부는 항등식으로 확인되지 않는다.")
@@ -288,13 +377,18 @@ def main(corp: str = "00763473") -> str:
     # ------------------------------------------------------------ 4
     w("## 4. 근거 (접수번호 → 원문 위치)")
     w("")
+    w("세 상태를 구분한다. **계산 입력 상태**는 매핑·계산에 쓸 수 있는지(정상·참고·계산 안 함)이고, 원문 검증이 끝났다는 뜻이 아니다. "
+      "**원문 대조**는 직접 대조(수기 확인표로 원문을 읽음) / API 간 대조(다른 보고서의 같은 기간 API 값과 일치 — 원문을 직접 본 것은 아님) / 미대조. "
+      "**위치 근거**는 원문에서 확인 / API 정보로 구성(재무제표 구분·계정명·열로 만든 경로).")
+    w("")
     w("원문 위치는 API 행(재무제표 구분·계정명·열)에 대응하는 사업보고서의 표다. API 응답 행 번호·순서는 수집한 응답 안의 위치이며 원문 표의 줄 번호가 아니다. 수기 확인값은 확인표의 원문 위치를 그대로 옮겼다. "
       "링크는 DART 공시 뷰어.")
     w("")
-    w("| ID | 계정 | 연도 | 값 | 상태 | 보고서 | 원문 위치 | 추출 방법 |")
-    w("|---|---|---|---:|---|---|---|---|")
+    w("| ID | 계정 | 연도 | 값 | 계산 입력 상태 | 원문 대조 | 위치 근거 | 보고서 | 원문 위치 | 추출 방법 |")
+    w("|---|---|---|---:|---|---|---|---|---|---|")
     for e in ev.rows:
         w(f"| {e['id']} | {e['account']} | {e['year']} | {eok(e['value'])} | {STATUS_KO.get(e['status'], e['status'])} | "
+          f"{esc(e['verify'])} | {e['where_basis']} | "
           f"[{esc(e['report'])}]({e['link']}) | {esc(e['where'])} | {esc(e['method'])} |")
     w("")
     # ------------------------------------------------------------ 5
@@ -309,12 +403,14 @@ def main(corp: str = "00763473") -> str:
       f"비교군 기준 지표 {len(gap)}개는 파일럿 비교군(평가기업 제외 3개사, n < 20)이라 계산 검증용으로만 표시하고 점수에 넣지 않는다 |")
     flows = " / ".join(f"{y}: 매출 {eok(raw.get(('revenue', y)))}, 영업이익 {eok(raw.get(('operating_income', y)))}, "
                        f"영업현금흐름 {eok(raw.get(('operating_cash_flow', y)))}" for y in years)
-    w(f"| ③ 4년간 매출·이익 변화와 이익의 현금 전환 | **답할 수 있음 (비교 주의 포함)** | {flows}. "
+    w(f"| ③ 4년간 매출·이익 변화와 이익의 현금 전환 | **변화는 제시 가능 — 원인 설명과 일부 기간 비교는 부분 답변** | {flows}. "
+      + cash_note(raw, wc, years) + " "
       + span_note(pairs, ["revenue_yoy_growth", "operating_margin", "ocf_to_avg_assets"]) + " |")
     ic = trend[trend.metric == "interest_coverage"].set_index("year")
-    w(f"| ④ 단기 지급의무·이자 부담 여력 | **2025는 답할 수 있음, 과거는 일부 보류** | 2025: 이자보상배율 {fmt_value('interest_coverage', ic.loc['2025'].value)}, "
+    w(f"| ④ 단기 지급의무·이자 부담 여력 | **2025 재무비율 설명 가능 — 실제 지급 여력 판단은 부분 답변** | 2025: 이자보상배율 {fmt_value('interest_coverage', ic.loc['2025'].value)}, "
       f"유동비율 {fmt_value('current_ratio_hfs', trend[(trend.metric == 'current_ratio_hfs') & (trend.year == '2025')].value.iloc[0])}, "
       f"현금/단기 이자부채 {fmt_value('cash_to_short_term_debt', trend[(trend.metric == 'cash_to_short_term_debt') & (trend.year == '2025')].value.iloc[0])}. "
+      + "만기 일정·현금 사용 제한·약정(커버넌트)·미사용 한도는 확인하지 않아, 이 비율만으로 실제 지급 가능 여부를 판단하지 않는다. "
       + status_note(trend, ["interest_coverage", "current_ratio_hfs", "cash_to_short_term_debt"], years[:-1]) + " |")
     w("| ⑤ 정책·규제·기술 변화와 사업 위험 | **보류** | PESTEL·위험 요인 근거 카드(3주차) 미구현 |")
     w("")
@@ -335,7 +431,8 @@ def main(corp: str = "00763473") -> str:
     w("")
     w(f"**종합점수: 보류** — {cover.composite_hold_reasons}. "
       f"K는 반영된 배점({cover.scored_weight})만의 기여도라 다른 기업의 K나 100점 만점 점수와 비교하지 않는다. "
-      f"범위 하한 {float(cover.range_low):.1f} ~ 느슨한 상한 {float(cover.range_high_loose):.1f}.")
+      f"구조화 기여도 범위 — 배점 90 기준, AI 10 제외: {float(cover.range_low):.1f} ~ {float(cover.range_high_loose):.1f} "
+      "(확인된 기여도 ~ 미확인 배점을 모두 만점으로 둔 느슨한 상한. 신뢰구간이나 성공확률 범위가 아니다).")
     w("")
     text = "\n".join(L) + "\n"
     out_dir = INTERIM / "reports"

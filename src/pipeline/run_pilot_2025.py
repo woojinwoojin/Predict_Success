@@ -25,7 +25,7 @@ from src.scoring.score import coverage, score_row
 
 SCORING_FILE = "scoring_v2.yaml"  # v1은 보존 (제안, 반례로 대체됨)
 CONFIGS = ["pilot_v1.yaml", "account_map_v1.yaml", "basis_v1.yaml", SCORING_FILE, "trend_v1.yaml"]
-MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv", "hfs_confirmations.csv"]
+MANUAL = ["note_confirmations.csv", "mismatch_reviews.csv", "scope_changes.csv", "disclosure_issues.csv", "hfs_confirmations.csv", "cf_activity_reviews.csv"]
 
 
 def sha256_file(path) -> str:

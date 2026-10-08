@@ -1,5 +1,6 @@
-"""2022~2025 회고 추세 규칙(docs/decisions.md D14) 테스트."""
+"""2022~2025 회고 추세 규칙(docs/decisions.md D14~D16) 테스트."""
 
+import json
 from decimal import Decimal
 
 import pandas as pd
@@ -137,9 +138,48 @@ def test_working_capital_uses_reported_subtotal_and_confirms_sign_by_identity():
 
 def test_identity_with_operating_cash_flow_and_paid_items():
     rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, 20), cf(OCF_ID, 92),
-            cf("ifrs-full_IncomeTaxesPaidRefund", 10), cf("ifrs-full_InterestReceivedClassifiedAsOperatingActivities", 2)]
+            cf("ifrs-full_IncomeTaxesPaidRefundClassifiedAsOperatingActivities", 10),
+            cf("ifrs-full_InterestReceivedClassifiedAsOperatingActivities", 2)]
     wc = working_capital(rows, Decimal(1000), 0.05)
     assert wc["sign_status"] == "산술 일치" and wc["identity_target"].startswith("영업현금흐름")
+
+
+DIV_INV = "ifrs-full_DividendsReceivedClassifiedAsInvestingActivities"
+
+
+def review(**kw):
+    base = {"review_id": "A1", "rcept_no": "R", "account_nm": DIV_INV, "api_value": "5", "original_section": "영업활동", "flow": "유입",
+            "status": "confirmed"}
+    return {**base, **kw}
+
+
+def test_investing_coded_row_is_not_added_to_operating_identity_without_original_check():
+    rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, 20), cf(OCF_ID, 105), cf(DIV_INV, 5)]
+    wc = working_capital(rows, Decimal(1000), 0.05)
+    assert wc["sign_status"] == "검증 미완료" and wc["identity_residual"] == "5"
+    assert "제외" in wc["activity_status"] and "투자활동" in wc["activity_status"]
+
+
+def test_original_check_allows_row_and_records_code_conflict():
+    rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, 20), cf(OCF_ID, 105), cf(DIV_INV, 5)]
+    wc = working_capital(rows, Decimal(1000), 0.05, [review()])
+    assert wc["sign_status"] == "산술 일치" and wc["identity_residual"] == "0"
+    assert wc["activity_status"].startswith("원문 확인 A1") and "API 코드 [투자활동] ↔ 원문 표시 [영업활동]" in wc["activity_conflicts"]
+    terms = json.loads(wc["identity_terms"])
+    assert [t["sign"] for t in terms] == ["+", "+", "+", "+"] and terms[-1]["api_value"] == "5" and "A1" in terms[-1]["basis"]
+    # 다른 보고서·다른 금액의 확인은 쓰지 않는다
+    assert working_capital(rows, Decimal(1000), 0.05, [review(api_value="6")])["sign_status"] == "검증 미완료"
+    assert working_capital(rows, Decimal(1000), 0.05, [review(rcept_no="R_OTHER")])["sign_status"] == "검증 미완료"
+
+
+def test_expanded_terms_show_applied_sign_and_residual():
+    rows = [cf(NI_ID, 50), cf(ADJ_ID, 30), cf(WC_ID, 20), cf(OCF_ID, 95),
+            cf("ifrs-full_InterestPaidClassifiedAsOperatingActivities", 5)]
+    wc = working_capital(rows, Decimal(1000), 0.05)
+    terms = json.loads(wc["identity_terms"])
+    assert terms[-1]["sign"] == "−" and terms[-1]["applied"] == "-5" and "차감" in terms[-1]["basis"]
+    assert (wc["identity_total"], wc["identity_target_value"], wc["identity_residual"]) == ("95", "95", "0")
+    assert wc["activity_status"] == "코드상 영업활동 — 원문 미대조"
 
 
 def test_sign_unconfirmed_when_identity_fails_and_direction_not_stated():
