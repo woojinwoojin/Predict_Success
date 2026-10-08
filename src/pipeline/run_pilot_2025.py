@@ -105,7 +105,7 @@ def main(as_of: str) -> None:
     outputs = {}
     for name in ["dart_facts.csv", "account_check.csv", "metrics_2025.csv", "scores_2025.csv", "coverage_2025.csv",
                  "trend_baseline_2021.csv", "trend_2022_2025.csv", "working_capital_2022_2025.csv",
-                 "market_stats_2021_2025.csv", "market_summary_2021_2025.csv", "market_links.csv"]:
+                 "market_stats_2021_2025.csv", "market_summary_2021_2025.csv", "market_types_2021_2025.csv", "market_links.csv"]:
         shutil.copy2(INTERIM / name, out / name)
         outputs[name] = sha256_file(out / name)
     manifest = {

@@ -55,3 +55,23 @@ def fetch_index_table(idx_cd: str, stts_cd: str, start: int, end: int, session: 
 if __name__ == "__main__":
     # 화장품 생산현황 (idx 3043) / 통계표 '화장품 생산실적' (304301)
     print(fetch_index_table(*(sys.argv[1:3] or ["3043", "304301"]), start=2015, end=2025))
+
+
+def register_manual_file(src: Path, provider: str, table_id: str, meta: dict) -> Path:
+    """브라우저로 직접 내려받은 통계 파일을 원본 보존 위치로 옮기고 metadata.json을 남긴다.
+
+    자동 수집이 막힌 표(KOSIS 등)에 쓴다. 파일은 바꾸지 않고(이름만 original.확장자) 해시·내려받은 경로·출처를 기록한다.
+    """
+    data = src.read_bytes()
+    out = RAW / provider / table_id / new_run_id()
+    out.mkdir(parents=True, exist_ok=False)
+    dst = out / f"original{src.suffix.lower()}"
+    dst.write_bytes(data)
+    (out / "metadata.json").write_text(json.dumps({
+        **meta, "table_id": table_id, "registered_at": utc_now(), "original_name": src.name,
+        "method": "사용자가 브라우저에서 직접 내려받음 (자동 수집 실패 — 세션 필요)",
+        "file": {"name": dst.name, "sha256": sha256(data), "bytes": len(data)}}, ensure_ascii=False, indent=2), encoding="utf-8")
+    if sha256(dst.read_bytes()) != sha256(data):
+        raise IOError("복사본 해시 불일치")
+    src.unlink()
+    return out

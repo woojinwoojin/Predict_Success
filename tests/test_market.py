@@ -84,3 +84,49 @@ def test_manual_links_use_only_defined_judgements_and_are_not_scored():
     links = pd.read_csv(root / "data" / "manual" / "market_links.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
     assert set(links.judgement) <= {"비교 가능", "조건부 참고", "연결 보류"}
     assert set(links.score_use) == {"미반영"}
+
+
+# ---------------------------------------------------------------- 유형별 생산실적 (D19)
+from src.market.kosis_csv import parse_kosis_csv  # noqa: E402
+
+TYPE_CSV = ('"유형별(1)",2021,2022,2023\n"합계",166533,135908,145102\n"기초화장용 제품류",101789,75220,79455\n'
+            '"색조화장용 제품류",64744,60688,65648\n').encode("cp949")
+TYPE_CONFIG = {**CONFIG, "type_statistic": {"candidate_id": "M02", "total_label": "합계", "unit": "억원"}}
+TYPE_META = {"file": {"sha256": "def"}, "page_dates": {"updated": "2026-09-10"}}
+M01_ROWS = pd.DataFrame({"year": [2021, 2022, 2023], "value": [Decimal("16653313"), Decimal("13590776"), Decimal("14510243")]})
+
+
+def test_parse_kosis_csv_reads_cp949_rows_by_year():
+    t = parse_kosis_csv(TYPE_CSV, "cp949")
+    assert t["years"] == [2021, 2022, 2023] and t["rows"][0]["label"] == "합계"
+    assert t["rows"][1]["values"][2022] == Decimal("75220")
+
+
+def test_types_check_sum_and_total_against_m01_with_rounding_bound():
+    types, summary = run_market.build_types(parse_kosis_csv(TYPE_CSV, "cp949"), TYPE_CONFIG, M01_ROWS, Path("r"), TYPE_META)
+    total = types[types.type == "합계"].set_index("year")
+    assert total.loc[2023, "type_sum_check"] == "반올림 차이 +1억원" and total.loc[2022, "type_sum_check"] == "일치"
+    base = types[types.type == "기초화장용 제품류"].set_index("year")
+    assert base.loc[2022, "change_vs_prior"] == Decimal("-26569") and base.loc[2022, "comparability"] == "비교 주의"
+    assert set(summary.series) == {"합계", "기초화장용 제품류", "색조화장용 제품류"}
+
+
+def test_types_stop_when_total_differs_from_m01_or_sum_beyond_rounding():
+    m01 = M01_ROWS.assign(value=[Decimal("16653313"), Decimal("13600000"), Decimal("14510243")])
+    with pytest.raises(ValueError, match="M01"):
+        run_market.build_types(parse_kosis_csv(TYPE_CSV, "cp949"), TYPE_CONFIG, m01, Path("r"), TYPE_META)
+    bad = TYPE_CSV.decode("cp949").replace("64744", "64700").encode("cp949")
+    with pytest.raises(ValueError, match="유형 합"):
+        run_market.build_types(parse_kosis_csv(bad, "cp949"), TYPE_CONFIG, M01_ROWS, Path("r"), TYPE_META)
+
+
+def test_register_manual_file_moves_file_and_records_hash(tmp_path, monkeypatch):
+    import json
+    from src.collectors import stats
+    monkeypatch.setattr(stats, "RAW", tmp_path / "raw")
+    src = tmp_path / "다운로드.csv"
+    src.write_bytes(TYPE_CSV)
+    out = stats.register_manual_file(src, "kosis", "T1", {"encoding": "cp949"})
+    meta = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
+    assert not src.exists() and (out / "original.csv").read_bytes() == TYPE_CSV
+    assert meta["original_name"] == "다운로드.csv" and meta["file"]["sha256"] == stats.sha256(TYPE_CSV)
