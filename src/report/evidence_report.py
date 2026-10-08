@@ -18,6 +18,7 @@ from decimal import Decimal
 import pandas as pd
 import yaml
 
+from src.normalization.baseline import same_period_rows
 from src.normalization.build_facts import INTERIM, RAW, ROOT
 from src.normalization.selection import load_published_filings
 
@@ -69,6 +70,7 @@ def latest_run() -> tuple[str, dict, list[str]]:
     return manifest["run_id"], manifest, problems
 
 
+NO_DIRECT = "현재 보고서 원문 대조 미실시"
 EMPTY = {"value": "", "status": "없음", "report": "", "where": "", "method": "", "link": "", "verify": "미대조", "where_basis": ""}
 
 
@@ -80,6 +82,7 @@ class Evidence:
         facts = read("dart_facts.csv")
         self.facts = facts[(facts.corp_code == corp) & (facts.fs_div == fs) & (facts.value_status == "parsed")]
         self.fact_by_id = self.facts.set_index("row_id")
+        self.fact_records = self.facts.to_dict("records")
         check = read("account_check.csv")
         self.check = check[(check.corp_code == corp) & (check.fs_div == fs)]
         ev = read("account_check_evidence.csv")
@@ -115,7 +118,8 @@ class Evidence:
             if b.empty:
                 return {**EMPTY}
             b = b.iloc[0]
-            verify = {"일치": "API 간 대조 — 다른 보고서와 일치", "불일치": "API 간 대조 — 불일치"}.get(b.cross_check, "미대조")
+            verify = {"일치": "API 간 대조 — 다른 보고서와 일치", "불일치": "API 간 대조 — 불일치"}.get(
+                b.cross_check, f"미대조 — API 간 대조 불가: {b.note.split(': ', 1)[-1] if '대조 없음' in b.note else '대조 결과 없음'} · {NO_DIRECT}")
             return {"value": b.value, "status": b.status, "report": self.report_name(b.rcept_no),
                     "where": f"{self.section('CIS' if account == 'revenue' else 'BS')} > 전기 열. {b.note}",
                     "method": f"{b.extraction_method} — 2021 기초값 예외 (2022 보고서 전기 열)",
@@ -127,7 +131,7 @@ class Evidence:
         c = c.iloc[0]
         rcept = c.rcept_no
         out = {"value": c.value, "status": c.status, "report": self.report_name(rcept), "method": c.extraction_method or "—",
-               "verify": "미대조 — 계산용 값 없음" if c.status not in ("mapped", "candidate") else "미대조", "where_basis": "API 정보로 구성",
+               "verify": f"미대조 — 계산용 값 없음 · {NO_DIRECT}" if c.status not in ("mapped", "candidate") else "미대조", "where_basis": "API 정보로 구성",
                "link": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept}"}
         manual = self.notes[(self.notes.canonical_account == account) & (self.notes.rcept_no == rcept)
                             & (self.notes.period_end.str[:4] == str(year))]
@@ -156,29 +160,35 @@ class Evidence:
         return {**out, "where": where, "verify": self._cross_check(ev), "where_basis": "API 정보로 구성"}
 
     def _cross_check(self, ev: pd.DataFrame) -> str:
-        """사용한 API 행을 기준일 이전에 공개된 다른 보고서의 같은 기간 값(다음 해 보고서의 전기 열 등)과 대조한다.
+        """사용한 API 행을 기준일 이전에 공개된 다른 보고서의 같은 기간 대응 행(다음 해 보고서의 전기 열 등)과 대조한다.
 
-        원문을 직접 본 것이 아니라 API 응답끼리의 대조다."""
+        원문을 직접 본 것이 아니라 API 응답끼리의 대조다. 대조할 수 없을 때는 사유를 둘로 나눈다 (D17):
+        API 간 대조 불가 사유(동일 기간의 다른 보고서 없음 / 대응 행 없음)와, 현재 보고서 원문 대조 미실시.
+        """
         if ev.empty:
-            return "미대조"
-        results = []
+            return f"미대조 — 사용 행 없음 · {NO_DIRECT}"
+        results, bases, missing = [], set(), []
         for r in ev.itertuples():
             if r.row_id not in self.fact_by_id.index:
-                return "미대조"
+                return f"미대조 — 사용 행 중 수치로 읽힌 행이 아닌 것이 있음 · {NO_DIRECT}"
             f = self.fact_by_id.loc[r.row_id]
-            same = self.facts[(self.facts.rcept_no != f.rcept_no) & (self.facts.sj_div == f.sj_div) & (self.facts.account_id == f.account_id)
-                              & (self.facts.account_detail == f.account_detail) & (self.facts.account_nm == f.account_nm)
-                              & (self.facts.period_end == f.period_end)]
-            same = same[[self.published.get(x, {}).get("rcept_dt", "99999999") <= self.as_of for x in same.rcept_no]]
-            if same.empty:
+            same = same_period_rows({**f.to_dict(), "row_id": r.row_id}, self.fact_records, self.published, self.as_of)
+            if not same:
+                other = any(x["rcept_no"] != f.rcept_no and x["sj_div"] == f.sj_div and x["period_end"] == f.period_end
+                            and self.published.get(x["rcept_no"], {}).get("rcept_dt", "99999999") <= self.as_of for x in self.fact_records)
+                missing.append("다른 보고서에 대응 행 없음 (계정 코드·이름 모두 다름)" if other else "동일 기간의 다른 보고서 없음")
                 results.append(None)
             else:
-                results.append(all(Decimal(v) == Decimal(f.value) for v in same.value))
+                results.append(all(Decimal(x["value"]) == Decimal(f.value) for x, _ in same))
+                bases.update(b for _, b in same if b != "코드·계정명 같음")
+        note = f" (표기 차이: {'; '.join(sorted(bases))})" if bases else ""
         if any(x is False for x in results):
-            return "API 간 대조 — 불일치 (다른 보고서 값과 다름)"
+            return "API 간 대조 — 불일치 (다른 보고서 값과 다름)" + note
         if results and all(x is True for x in results):
-            return "API 간 대조 — 다음 보고서 비교 열과 일치"
-        return "미대조 — 같은 기간을 담은 다른 보고서 없음" if all(x is None for x in results) else "API 간 대조 — 일부 행만 대조"
+            return "API 간 대조 — 다음 보고서 비교 열과 일치" + note
+        if all(x is None for x in results):
+            return f"미대조 — API 간 대조 불가: {'; '.join(dict.fromkeys(missing))} · {NO_DIRECT}"
+        return f"API 간 대조 — 일부 행만 대조 (나머지: {'; '.join(dict.fromkeys(missing))})" + note
 
 
 def cash_note(raw: dict, wc: pd.DataFrame, years: list[int]) -> str:
@@ -378,7 +388,10 @@ def main(corp: str = "00763473") -> str:
     w("## 4. 근거 (접수번호 → 원문 위치)")
     w("")
     w("세 상태를 구분한다. **계산 입력 상태**는 매핑·계산에 쓸 수 있는지(정상·참고·계산 안 함)이고, 원문 검증이 끝났다는 뜻이 아니다. "
-      "**원문 대조**는 직접 대조(수기 확인표로 원문을 읽음) / API 간 대조(다른 보고서의 같은 기간 API 값과 일치 — 원문을 직접 본 것은 아님) / 미대조. "
+      "**원문 대조**는 직접 대조(수기 확인표로 원문을 읽음) / API 간 대조(다른 보고서의 같은 기간 대응 행 API 값과 비교 — 원문을 직접 본 것은 아님. "
+      "계정명·코드 표기가 보고서마다 바뀐 경우 코드나 계정명 중 하나가 같으면 대응 행으로 보고 표기 차이를 적음) / 미대조. "
+      "미대조 사유는 둘로 나눈다: API 간 대조 불가 사유(동일 기간의 다른 보고서 없음 — 2025 값은 다음 해 보고서가 아직 없음)와 "
+      "현재 보고서 원문 대조 미실시(같은 해 보고서 원문과 직접 대조하는 것은 가능하지만 아직 하지 않음). "
       "**위치 근거**는 원문에서 확인 / API 정보로 구성(재무제표 구분·계정명·열로 만든 경로).")
     w("")
     w("원문 위치는 API 행(재무제표 구분·계정명·열)에 대응하는 사업보고서의 표다. API 응답 행 번호·순서는 수집한 응답 안의 위치이며 원문 표의 줄 번호가 아니다. 수기 확인값은 확인표의 원문 위치를 그대로 옮겼다. "

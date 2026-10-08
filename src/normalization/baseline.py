@@ -19,17 +19,43 @@ SOURCE_COLUMN = "전기"
 ACCOUNTS = ("total_assets", "inventory", "revenue")
 
 
-def cross_check(used: dict, rows: list[dict], published: dict, as_of: str) -> tuple[str, list[str]]:
-    """같은 기업·재무기준·재무제표·계정·세부구분·기간의 다른 보고서 값과 대조한다 (기준일 이전 공개분만)."""
-    same = [r for r in rows
+NON_STANDARD = "-표준계정코드 미사용-"
+
+
+def same_period_rows(used: dict, rows: list[dict], published: dict, as_of: str) -> list[tuple[dict, str]]:
+    """같은 기업·재무기준·재무제표·세부구분·기간을 담은 다른 보고서의 대응 행 (기준일 이전 공개분만).
+
+    보고서마다 계정명('당기순이익' → '당기순이익(손실)')이나 코드(표준코드 ↔ 표준코드 미사용)가 바뀔 수 있으므로
+    표준코드가 같으면 코드로, 아니면 계정명이 같은 행으로 대응시킨다. 둘 다 다르면 대응 행이 아니다.
+    """
+    cand = [r for r in rows
             if r["rcept_no"] != used["rcept_no"] and r["corp_code"] == used["corp_code"] and r["fs_div"] == used["fs_div"]
-            and r["sj_div"] == used["sj_div"] and r["account_id"] == used["account_id"] and r["account_detail"] == used["account_detail"]
+            and r["sj_div"] == used["sj_div"] and r["account_detail"] == used["account_detail"]
             and r["period_end"] == used["period_end"] and r["value_status"] == "parsed"
             and published.get(r["rcept_no"], {}).get("rcept_dt", "99999999") <= as_of]
+    by_code = [r for r in cand if used["account_id"] != NON_STANDARD and r["account_id"] == used["account_id"]]
+    out = []
+    for rcept in dict.fromkeys(r["rcept_no"] for r in cand):
+        code = [r for r in by_code if r["rcept_no"] == rcept]
+        name = [r for r in cand if r["rcept_no"] == rcept and r["account_nm"] == used["account_nm"]]
+        for r in code or name:
+            if r["account_id"] == used["account_id"] and r["account_nm"] == used["account_nm"]:
+                basis = "코드·계정명 같음"
+            elif r in code:
+                basis = f"코드 같음, 계정명 '{r['account_nm']}'"
+            else:
+                basis = f"계정명 같음, 코드 {r['account_id']}"
+            out.append((r, basis))
+    return out
+
+
+def cross_check(used: dict, rows: list[dict], published: dict, as_of: str) -> tuple[str, list[str]]:
+    """같은 기간을 담은 다른 보고서의 대응 행 값과 대조한다 (same_period_rows)."""
+    same = same_period_rows(used, rows, published, as_of)
     if not same:
-        return "대조 없음", ["같은 기간을 담은 다른 보고서 없음"]
-    found = [f"{r['report_bsns_year']} 보고서 {r['source_column']} {Decimal(r['value']):,}" for r in same]
-    if all(Decimal(r["value"]) == Decimal(used["value"]) for r in same):
+        return "대조 없음", ["같은 기간을 담은 다른 보고서에 대응 행 없음"]
+    found = [f"{r['report_bsns_year']} 보고서 {r['source_column']} {Decimal(r['value']):,} ({basis})" for r, basis in same]
+    if all(Decimal(r["value"]) == Decimal(used["value"]) for r, _ in same):
         return "일치", found
     return "불일치", found
 

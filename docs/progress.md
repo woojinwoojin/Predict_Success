@@ -9,7 +9,7 @@
 
 **다음 세션 시작점 (2026-10-08 마감 기준)**
 - 다음 작업: **시장·외부환경 지표(6.4) 통계 연결** — 문제 정의부터. 통계 후보별 대상 지역·생산/판매 구분·금액/물량·기간·단위·공개일을 정리하고, 국내 생산 통계와 해외 법인 포함 연결 매출의 범위 차이를 표시. 비교군을 억지로 20개로 넓히지 않고 범위가 맞는 자료부터. 1주차 마무리(데이터 사전·KOSIS 점검·블로그)도 이 작업과 함께
-- 전체 실행: `.venv\Scripts\python -m src.pipeline.run_pilot_2025` → `data/interim/runs/{run_id}/` (결과 + `manifest.json`, 2022~2025 회고 추세 포함). 테스트: `.venv\Scripts\python -m pytest` (145개). 보고서: `.venv\Scripts\python -m src.report.evidence_report 00763473`
+- 전체 실행: `.venv\Scripts\python -m src.pipeline.run_pilot_2025` → `data/interim/runs/{run_id}/` (결과 + `manifest.json`, 2022~2025 회고 추세 포함). 테스트: `.venv\Scripts\python -m pytest` (146개). 보고서: `.venv\Scripts\python -m src.report.evidence_report 00763473`
 - 현재 상태: 2025 지표 75개(정상 66 · 참고 4 · 계산 안 함 5), 점수 규칙 v2 채택·미검증, 종합점수 보류 (시장 지표 미구현, 비교군 n < 20, AI 미제공). 회고 추세 200행(정상 164 · 참고 13 · 계산 안 함 23 / 직접 비교 가능 82 · 비교 주의 82) — 참고 표시만
 - 설계 결정 D1~D16는 [decisions.md](decisions.md), 점수 규칙 근거는 [scoring_rules_v2.md](scoring_rules_v2.md)
 

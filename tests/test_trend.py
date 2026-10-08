@@ -77,6 +77,22 @@ def test_baseline_ignores_reports_published_after_as_of(monkeypatch):
     assert run_baseline(monkeypatch, rows)["total_assets"]["cross_check"] == "대조 없음"
 
 
+def test_cross_check_matches_rows_whose_name_or_code_changed_between_reports():
+    used = fact()
+    renamed = fact(row_id="r2", rcept_no="R2023", report_bsns_year="2023", account_nm="자산총계(합계)")
+    recoded = fact(row_id="r3", rcept_no="R2023", report_bsns_year="2023", account_id="-표준계정코드 미사용-")
+    assert baseline.cross_check(used, [used, renamed], PUBLISHED, "20261008")[0] == "일치"
+    assert "코드 같음" in baseline.cross_check(used, [used, renamed], PUBLISHED, "20261008")[1][0]
+    assert baseline.cross_check(used, [used, recoded], PUBLISHED, "20261008")[0] == "일치"
+    # 코드·이름이 모두 다르면 대응 행이 아님
+    other = fact(row_id="r4", rcept_no="R2023", account_id="-표준계정코드 미사용-", account_nm="기타", value="5")
+    assert baseline.cross_check(used, [used, other], PUBLISHED, "20261008")[0] == "대조 없음"
+    # 표준코드 미사용 행끼리는 코드로 대응시키지 않는다
+    a = fact(account_id="-표준계정코드 미사용-", account_nm="재고자산")
+    b = fact(row_id="r5", rcept_no="R2023", account_id="-표준계정코드 미사용-", account_nm="기타재고", value="7")
+    assert baseline.cross_check(a, [a, b], PUBLISHED, "20261008")[0] == "대조 없음"
+
+
 def test_baseline_with_wrong_period_or_currency_is_held(monkeypatch):
     assert run_baseline(monkeypatch, [fact(period_end="2022-12-31")])["total_assets"]["status"] == "review_needed"
     assert run_baseline(monkeypatch, [fact(currency="USD")])["total_assets"]["status"] == "review_needed"
