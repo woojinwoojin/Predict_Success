@@ -52,9 +52,39 @@ def fetch_index_table(idx_cd: str, stts_cd: str, start: int, end: int, session: 
     return out
 
 
-if __name__ == "__main__":
-    # 화장품 생산현황 (idx 3043) / 통계표 '화장품 생산실적' (304301)
-    print(fetch_index_table(*(sys.argv[1:3] or ["3043", "304301"]), start=2015, end=2025))
+BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
+GUIDELINE_DOCS = ROOT / "data" / "manual" / "stat_guideline_docs.csv"
+
+
+def fetch_guideline_docs(session: requests.Session | None = None, only: list[str] | None = None) -> dict:
+    """통계 작성지침 문서(D20)를 받은 그대로 보존한다: data/raw/stats/guidelines/{doc_id}/{run_id}/original.{ext} + metadata.json.
+
+    등록부(stat_guideline_docs.csv)에서 status가 '수집'인 문서만 받는다. 대한화장품협회 첨부파일은 브라우저 헤더가 없으면
+    200 응답에 404 안내 HTML을 돌려주므로, 응답 형식이 등록부의 doc_type과 맞지 않으면 저장하지 않고 중단한다.
+    """
+    import csv
+    s = session or requests.Session()
+    rows = [r for r in csv.DictReader(GUIDELINE_DOCS.open(encoding="utf-8-sig")) if r["status"] == "수집" and (not only or r["doc_id"] in only)]
+    magic = {"pdf": b"%PDF", "xlsx": b"PK"}
+    saved = {}
+    for r in rows:
+        resp = s.get(r["url"], headers={**BROWSER_HEADERS, "Referer": "https://kcia.or.kr/"}, timeout=60)
+        resp.raise_for_status()
+        data = resp.content
+        if r["doc_type"] in magic and not data.startswith(magic[r["doc_type"]]):
+            raise IOError(f"{r['doc_id']}: {r['doc_type']}가 아닌 응답 ({resp.headers.get('content-type')}, {len(data)} bytes)")
+        out = RAW / "guidelines" / r["doc_id"] / new_run_id()
+        out.mkdir(parents=True, exist_ok=False)
+        name = f"original.{r['doc_type']}"
+        (out / name).write_bytes(data)
+        (out / "metadata.json").write_text(json.dumps({
+            "doc_id": r["doc_id"], "title": r["title"], "issuer": r["issuer"], "url": r["url"], "version": r["version"],
+            "applies_to_years": r["applies_to_years"], "collected_at": utc_now(), "status_code": resp.status_code,
+            "content_type": resp.headers.get("content-type"),
+            "file": {"name": name, "sha256": sha256(data), "bytes": len(data)},
+            "note": "게시판 현재본은 수집 시점의 문안이며, 과거 연도에 적용된 문안이라는 뜻이 아니다"}, ensure_ascii=False, indent=2), encoding="utf-8")
+        saved[r["doc_id"]] = out
+    return saved
 
 
 def register_manual_file(src: Path, provider: str, table_id: str, meta: dict) -> Path:
@@ -75,3 +105,12 @@ def register_manual_file(src: Path, provider: str, table_id: str, meta: dict) ->
         raise IOError("복사본 해시 불일치")
     src.unlink()
     return out
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["guidelines"]:  # 작성지침 문서 (D20): python -m src.collectors.stats guidelines [G01 G02 ...]
+        for doc_id, path in fetch_guideline_docs(only=sys.argv[2:] or None).items():
+            print(doc_id, path)
+    else:
+        # 화장품 생산현황 (idx 3043) / 통계표 '화장품 생산실적' (304301)
+        print(fetch_index_table(*(sys.argv[1:3] or ["3043", "304301"]), start=2015, end=2025))

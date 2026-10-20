@@ -130,3 +130,71 @@ def test_register_manual_file_moves_file_and_records_hash(tmp_path, monkeypatch)
     meta = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
     assert not src.exists() and (out / "original.csv").read_bytes() == TYPE_CSV
     assert meta["original_name"] == "다운로드.csv" and meta["file"]["sha256"] == stats.sha256(TYPE_CSV)
+
+
+# ---------------------------------------------------------------- 작성지침 확인 (D20)
+import hashlib  # noqa: E402
+
+
+def guideline_tables(tmp_path):
+    doc = tmp_path / "data" / "raw" / "g.pdf"
+    doc.parent.mkdir(parents=True)
+    doc.write_bytes(b"%PDF guide")
+    digest = hashlib.sha256(b"%PDF guide").hexdigest()
+    return {
+        "stat_guideline_docs.csv": pd.DataFrame([{"doc_id": "G1", "status": "수집"}, {"doc_id": "G9", "status": "미확보"}]),
+        "stat_guideline_facts.csv": pd.DataFrame([
+            {"fact_id": "S1", "doc_id": "G1", "evidence_level": "명시적 확인", "raw_path": "data/raw/g.pdf", "sha256": digest},
+            {"fact_id": "S2", "doc_id": "G9", "evidence_level": "미확인", "raw_path": "", "sha256": ""}]),
+        "stat_guideline_judgments.csv": pd.DataFrame([
+            {"judgment_id": "J1", "question": "Q1 가격 기준", "status": "부분 확인", "evidence": "S1"},
+            {"judgment_id": "J2", "question": "Q3 연속성", "status": "미확인", "evidence": "S2"}]),
+    }
+
+
+def run_guidelines(tables, tmp_path, monkeypatch):
+    monkeypatch.setattr(run_market, "ROOT", tmp_path)
+    monkeypatch.setattr(run_market, "read_manual", lambda name: tables[name].copy())
+    return run_market.build_guidelines()
+
+
+def test_guidelines_pass_when_raw_hash_and_evidence_match(tmp_path, monkeypatch):
+    facts, judgments = run_guidelines(guideline_tables(tmp_path), tmp_path, monkeypatch)
+    assert list(judgments.status) == ["부분 확인", "미확인"]
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((0, "sha256"), "0" * 64), "해시 불일치"),
+    (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((0, "doc_id"), "G7"), "등록부에 없는 문서"),
+    # 미확보 문서만 가리키는 사실을 확인으로 쓰지 않는다
+    (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((1, "evidence_level"), "간접 근거"), "보존 원본 없이"),
+    (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((0, "evidence_level"), "확인"), "근거 수준"),
+    # Q3에는 '확인'이 아니라 변경 확인 / 연속성 확인 / 미확인만 쓴다
+    (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "status"), "확인"), "쓸 수 없는 상태"),
+    (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((0, "evidence"), "S1;S99"), "S99"),
+])
+def test_guidelines_stop_on_broken_evidence(tmp_path, monkeypatch, change, message):
+    tables = guideline_tables(tmp_path)
+    change(tables)
+    with pytest.raises(ValueError, match=message):
+        run_guidelines(tables, tmp_path, monkeypatch)
+
+
+def test_manual_guideline_records_keep_scores_off_and_q3_unconfirmed():
+    root = Path(__file__).resolve().parents[1]
+    read = lambda name: pd.read_csv(root / "data" / "manual" / name, dtype=str, keep_default_na=False, encoding="utf-8-sig")  # noqa: E731
+    links, judgments = read("market_links.csv"), read("stat_guideline_judgments.csv")
+    # 작성지침 확인만으로 점수를 활성화하지 않는다 (11-3 완료 조건은 정의 확인·적용 범위까지)
+    assert set(links.score_use) == {"미반영"} and links.score_eligibility.str.startswith("보류").all()
+    assert (links.guideline_evidence != "").all()
+    q3 = judgments[judgments.question.str.startswith("Q3")]
+    assert set(q3.status) <= JUDGMENT_Q3 and len(q3) == 2
+
+
+JUDGMENT_Q3 = run_market.JUDGMENT_STATUS["Q3"]
+
+
+@pytest.mark.skipif(not (Path(__file__).resolve().parents[1] / "data" / "raw" / "stats" / "guidelines").exists(), reason="보존 원본 없음 (data/raw는 git 제외)")
+def test_manual_guideline_records_match_preserved_raw():
+    facts, judgments = run_market.build_guidelines()
+    assert len(facts) >= 20 and set(judgments.judgment_id) >= {"J01", "J02", "J03", "J04", "J05"}

@@ -5,11 +5,12 @@
 - market_stats_2021_2025.csv: 연도별 값, 계산 증감률과 공식 증감률 대조, 보고 업체수, 비교 주의
 - market_summary_2021_2025.csv: 기간별 연평균 성장률 (두 기간을 함께 — 기간 선택에 민감)
 - market_types_2021_2025.csv: 유형별 생산실적 (M02) — 유형 합 = 합계, 합계 = M01 확인 (D19)
-- market_links.csv: 기업 × 통계 후보 연결 판정 + 근거 사실
+- market_links.csv: 기업 × 통계 후보 연결 판정 + 근거 사실 + 작성지침 기준 적용 범위 (D20)
 - reports/market_stats_{as_of}.md: 통계 추세, 기업별 범위 차이, 연결 판정
 점수에는 반영하지 않는다.
 """
 
+import hashlib
 import json
 import sys
 from decimal import ROUND_HALF_UP, Decimal
@@ -137,9 +138,62 @@ def build_links() -> pd.DataFrame:
     missing = sorted({e for ev in links.evidence for e in ev.split(";") if e and e not in facts.index})
     if missing:
         raise ValueError(f"연결 판정이 없는 근거를 가리킴: {missing}")
+    if "guideline_evidence" in links:  # 작성지침 사실(S)·판정(J) (D20)
+        known = set(read_manual("stat_guideline_facts.csv").fact_id) | set(read_manual("stat_guideline_judgments.csv").judgment_id)
+        missing = sorted({e for ev in links.guideline_evidence for e in ev.split(";") if e and e not in known})
+        if missing:
+            raise ValueError(f"연결 판정이 없는 작성지침 근거를 가리킴: {missing}")
     links["evidence_detail"] = [" | ".join(f"{e} {facts.loc[e, 'topic']}: {facts.loc[e, 'fact']} (접수 {facts.loc[e, 'rcept_no']})"
                                            for e in ev.split(";") if e) for ev in links.evidence]
     return links
+
+
+EVIDENCE_LEVELS = {"명시적 확인", "간접 근거", "미확인"}
+# Q1·Q2는 정의 확인, Q3는 연속성 — '변경 언급을 찾지 못함'과 '연속성 확인'을 구분한다 (D20)
+JUDGMENT_STATUS = {"Q1": {"확인", "부분 확인", "미확인"}, "Q2": {"확인", "부분 확인", "미확인"},
+                   "Q3": {"변경 확인", "연속성 확인", "미확인"}, "공통": {"확인", "미확인"}}
+
+
+def build_guidelines() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """작성지침 사실·판정(D20)을 읽고 근거 연결을 확인한다. 하나라도 어긋나면 중단.
+
+    - 사실의 문서는 등록부에 있어야 하고, 보존된 원본의 sha256이 기록과 같아야 한다
+    - 미확보 문서만 가리키는 사실은 '미확인'이어야 한다 (찾지 못함을 확인으로 쓰지 않음)
+    - 판정의 근거는 기록된 사실이어야 하고, 상태는 질문별로 정한 값만 쓴다
+    """
+    docs = read_manual("stat_guideline_docs.csv").set_index("doc_id")
+    facts, judgments = read_manual("stat_guideline_facts.csv"), read_manual("stat_guideline_judgments.csv")
+    errors = []
+    for f in facts.itertuples():
+        ids = f.doc_id.split(";")
+        if unknown := [d for d in ids if d not in docs.index]:
+            errors.append(f"{f.fact_id}: 등록부에 없는 문서 {unknown}")
+            continue
+        if f.evidence_level not in EVIDENCE_LEVELS:
+            errors.append(f"{f.fact_id}: 근거 수준 '{f.evidence_level}'")
+        kept = [d for d in ids if docs.loc[d, "status"] in ("수집", "기존 보존")]
+        if not kept and f.evidence_level != "미확인":
+            errors.append(f"{f.fact_id}: 보존 원본 없이 '{f.evidence_level}'")
+        paths, hashes = [p for p in f.raw_path.split(";") if p], [h for h in f.sha256.split(";") if h]
+        if len(paths) != len(kept) or len(hashes) != len(kept):
+            errors.append(f"{f.fact_id}: 원본 경로·해시 수가 보존 문서 수({len(kept)})와 다름")
+            continue
+        for path, digest in zip(paths, hashes):
+            file = ROOT / path
+            if not file.exists():
+                errors.append(f"{f.fact_id}: 원본 없음 {path}")
+            elif hashlib.sha256(file.read_bytes()).hexdigest() != digest:
+                errors.append(f"{f.fact_id}: 원본 해시 불일치 {path}")
+    fact_ids = set(facts.fact_id)
+    for j in judgments.itertuples():
+        q = j.question.split()[0]
+        if j.status not in JUDGMENT_STATUS.get(q, set()):
+            errors.append(f"{j.judgment_id}: '{j.question}'에 쓸 수 없는 상태 '{j.status}'")
+        if missing := [e for e in j.evidence.split(";") if e not in fact_ids]:
+            errors.append(f"{j.judgment_id}: 기록되지 않은 사실 {missing}")
+    if errors:
+        raise ValueError("작성지침 기록 확인 실패:\n" + "\n".join(errors))
+    return facts, judgments
 
 
 def fmt(v, digits=1) -> str:
@@ -180,8 +234,29 @@ def type_section(w, config: dict, types: pd.DataFrame, type_summary: pd.DataFram
     w("")
 
 
+def guideline_section(w, facts: pd.DataFrame, judgments: pd.DataFrame) -> None:
+    w("## 1-1. 작성지침 확인 — 가격·보고 범위·연속성 (D20)")
+    w("")
+    w("통계 정의를 확인하는 것과 점수에 쓸 자격을 얻는 것은 다른 단계다. 이 절은 정의 확인과 기업별 적용 범위까지이며, 점수는 바꾸지 않는다.")
+    w("")
+    w("| ID | 질문 | 적용 연도 | 상태 | 확인한 것 | 남은 불확실성 | 결과 | 근거 |")
+    w("|---|---|---|---|---|---|---|---|")
+    for j in judgments.itertuples():
+        w(f"| {j.judgment_id} | {j.question} | {j.applies_years} | **{j.status}** | {j.confirmed} | {j.remaining_uncertainty} | {j.consequence} | {j.evidence.replace(';', ', ')} |")
+    w("")
+    w("| ID | 질문 | 주제 | 적용 연도 | 근거 수준 | 문서 (판·위치) | 해석 |")
+    w("|---|---|---|---|---|---|---|")
+    for f in facts.itertuples():
+        w(f"| {f.fact_id} | {f.question} | {f.topic} | {f.applies_years} | {f.evidence_level} | {f.doc_id.replace(';', ', ')} ({f.doc_version}; {f.location}) | {f.interpretation} |")
+    w("")
+    w("- 근거 수준: 명시적 확인(해당 연도 문서에 적혀 있음) / 간접 근거(다른 연도 문서·게시판 현재본·구조에서 추론) / 미확인(문서 미확보 또는 찾지 못함). 원문 인용·원본 경로·해시는 `data/manual/stat_guideline_facts.csv`")
+    w("- 게시판 공지는 같은 주소에서 본문이 갱신된다(G04: 등록일 2021-01-06인 글의 본문이 2025년도 기준). 공지 현재본을 과거 연도의 지침으로 쓰지 않는다")
+    w("")
+
+
 def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame, links: pd.DataFrame, meta: dict, table: dict,
-           types: pd.DataFrame | None = None, type_summary: pd.DataFrame | None = None) -> str:
+           types: pd.DataFrame | None = None, type_summary: pd.DataFrame | None = None,
+           guidelines: tuple[pd.DataFrame, pd.DataFrame] | None = None) -> str:
     cands = read_manual("market_stat_candidates.csv")
     facts = read_manual("company_scope_facts.csv")
     L = []
@@ -209,6 +284,8 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
     m01 = cands.set_index("candidate_id").loc["M01"]
     w(f"**M01 정의·범위:** {m01.reporter}. 포함·제외: {m01.include_exclude}. 가격 평가 기준: {m01.valuation_basis}. 개정 이력: {m01.revision_history}.")
     w("")
+    if guidelines is not None:
+        guideline_section(w, *guidelines)
     w("## 2. 국내 화장품 생산금액 추세")
     w("")
     ctx = [c for c in stats.columns if c.startswith("context_")]
@@ -219,14 +296,16 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
         w(f"| {r.year} | {int(r.value):,} | {fmt(r.yoy) if r.yoy is not None and not pd.isna(r.yoy) else '—'} | "
           f"{'' if r.official_yoy_pct is None else str(r.official_yoy_pct) + '%'} | {r.yoy_check or '—'} | {extra} | {r.comparability}{(' — ' + r.caution) if r.caution else ''} |")
     w("")
-    w("| 기간 | 연평균 성장률 | 주의 |")
-    w("|---|---:|---|")
+    roles = config.get("cagr_span_roles", {})
+    w("| 기간 | 용도 | 연평균 성장률 | 주의 |")
+    w("|---|---|---:|---|")
     for s in summary.itertuples():
-        w(f"| {s.span} ({s.years}년) | {fmt(s.cagr)} | {s.caution or '—'} |")
+        w(f"| {s.span} ({s.years}년) | {roles.get(s.span, '—')} | {fmt(s.cagr)} | {s.caution or '—'} |")
     w("")
-    w("- 연평균 성장률은 시작 연도에 민감하다. 2021에서 2022로 크게 줄었기 때문에 2022 시작은 높게, 2021 시작은 낮게 나온다. 어느 쪽도 '시장 성장률'로 단정하지 않는다")
+    w("- 연평균 성장률은 시작 연도에 민감하다. 2021에서 2022로 크게 줄었기 때문에 2022 시작은 높게, 2021 시작은 낮게 나온다. 유리한 숫자를 고르는 문제가 아니다: "
+      "2022→2025는 재무 회고 추세와 맞춘 기본 비교 기간(연속성 미확인), 2021→2025는 시작점 민감도 확인용. 어느 쪽도 '시장 성장률'로 단정하지 않는다")
     w("- 보고 업체수가 해마다 늘었다. 합계는 그해 생산실적을 보고한 책임판매업체의 집계이므로, 증감에는 집계 대상의 변화도 섞여 있을 수 있다(확인 안 함)")
-    w("- 명목 금액이다. 가격 평가 기준을 작성지침에서 확인하기 전에는 실질 성장으로 해석하지 않는다")
+    w("- 명목 금액이다 (단가 × 수량, 물가 조정 없음 — J01). 가격 효과와 수량 효과를 나누지 않으며 실질 성장으로 해석하지 않는다")
     w("")
     if types is not None:
         type_section(w, config, types, type_summary)
@@ -249,9 +328,16 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
             for r in sub.itertuples():
                 w(f"| {r.company} | **{r.judgement}** | {r.use} | {r.region_match} | {r.product_match} | {r.measure_match} | {r.period_match} | "
                   f"{r.differences} | {r.evidence.replace(';', ', ')} |")
+        if "application_scope" in sub:
+            w("")
+            w("| 기업 | 통계가 설명할 수 있는 범위 | 간접 지표 역할 | 점수 자격 | 작성지침 근거 |")
+            w("|---|---|---|---|---|")
+            for r in sub.itertuples():
+                w(f"| {r.company} | {r.application_scope} | {r.proxy_role} | {r.score_eligibility} | {r.guideline_evidence.replace(';', ', ')} |")
         w("")
-    w("어느 기업도 '비교 가능'으로 판정하지 않았다. 통계(책임판매업체가 보고한 생산금액)와 기업 매출의 측정 대상·평가 기준이 같다고 확인되지 않았으므로 "
-      "시장점유율이나 '시장 대비 성장 격차'를 계산하지 않는다.")
+    w("어느 기업도 '비교 가능'으로 판정하지 않았다. 통계(책임판매업자가 보고한 국내 제조품의 부가세 포함 출하가 기준 금액)와 기업 매출(부가세 제외, 연결 범위)은 "
+      "측정 대상·평가 기준이 다르다고 작성 안내로 확인됐다(J01·J02). 국내 고객사의 ODM 물량은 고객사 실적에 들어가므로 통계는 ODM 수요의 직접 측정이 아니라 "
+      "고객 측 생산 활동의 간접 지표 후보일 뿐이다. 시장점유율이나 '시장 대비 성장 격차'를 계산하지 않는다.")
     w("")
     w("### 근거 사실 (사업보고서 원문)")
     w("")
@@ -284,6 +370,7 @@ def main(as_of: str) -> dict:
     parsed = parse_kosis_csv((type_dir / type_meta["file"]["name"]).read_bytes(), type_meta["encoding"])
     types, type_summary = build_types(parsed, config, stats, type_dir, type_meta)
     links = build_links()
+    guidelines = build_guidelines()
     stats.to_csv(INTERIM / "market_stats_2021_2025.csv", index=False, encoding="utf-8-sig")
     pd.concat([summary.assign(series=config["base_statistic"]["series"]), type_summary], ignore_index=True).to_csv(
         INTERIM / "market_summary_2021_2025.csv", index=False, encoding="utf-8-sig")
@@ -291,10 +378,11 @@ def main(as_of: str) -> dict:
     links.to_csv(INTERIM / "market_links.csv", index=False, encoding="utf-8-sig")
     (INTERIM / "reports").mkdir(exist_ok=True)
     path = INTERIM / "reports" / f"market_stats_{as_of}.md"
-    path.write_text(report(as_of, config, stats, summary, links, meta, table, types, type_summary), encoding="utf-8")
+    path.write_text(report(as_of, config, stats, summary, links, meta, table, types, type_summary, guidelines), encoding="utf-8")
     print("[시장 통계]", stats[["year", "value", "yoy_check", "comparability"]].to_string(index=False))
     print("[연평균]", summary[["span", "cagr"]].to_string(index=False))
     print("[연결 판정]", links.groupby(["candidate_id", "judgement"]).size().to_dict(), "→", path)
+    print("[작성지침]", dict(zip(guidelines[1].judgment_id + " " + guidelines[1].question, guidelines[1].status)))
     return {"M01": {"raw_run": raw_dir.name, "raw_sha256": meta["files"]["table.html"]["sha256"]},
             "M02": {"raw_run": type_dir.name, "raw_sha256": type_meta["file"]["sha256"]}}
 
