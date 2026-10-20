@@ -65,16 +65,17 @@ def pct1(x) -> Decimal:
 
 
 def continuity_by_pair(judgments: pd.DataFrame | None) -> dict[tuple[int, int], str]:
-    """Q3 판정표의 기간별 정의 연속성 (D20): 인접 연도 쌍 → '상태 (판정 ID)'. 판정이 다루지 않는 쌍은 없음."""
-    out = {}
+    """Q3 판정표의 기간별 정의 연속성 (D20·D22): 인접 연도 쌍 → '상태 (판정 ID); …'. 한 구간에 여러 판정(입력 단계·집계 단계)이
+    걸리면 모두 적는다. 판정이 다루지 않는 쌍은 없음."""
+    out: dict[tuple[int, int], list[str]] = {}
     if judgments is None:
-        return out
+        return {}
     for j in judgments[judgments.question.str.startswith("Q3")].itertuples():
         years = sorted(int(y) for y in j.claim_years.split(";") if y)
         for a, b in zip(years, years[1:]):
             if b == a + 1:
-                out[(a, b)] = f"{j.status} ({j.judgment_id})"
-    return out
+                out.setdefault((a, b), []).append(f"{j.status} ({j.judgment_id})")
+    return {k: "; ".join(v) for k, v in out.items()}
 
 
 def pair_status(y: int, first: int, value_ok: bool, cautions: dict, continuity: dict) -> dict:
@@ -90,12 +91,13 @@ def pair_status(y: int, first: int, value_ok: bool, cautions: dict, continuity: 
         calc, comp = "계산 불가 — 값 없음", "계산 불가"
     else:
         calc = "계산"
-        comp = "비교 주의" if pair in cautions else ("직접 비교 가능" if cont.startswith("연속성 확인") else "연속성 미확인")
+        all_confirmed = cont != "판정 없음" and all(part.startswith("연속성 확인") for part in cont.split("; "))
+        comp = "비교 주의" if pair in cautions else ("직접 비교 가능" if all_confirmed else "연속성 미확인")
     return {"calc_status": calc, "definition_continuity": cont, "comparability": comp, "caution": cautions.get(pair, "")}
 
 
 def span_continuity(a: int, b: int, continuity: dict) -> str:
-    states = list(dict.fromkeys(continuity.get((y - 1, y), "판정 없음") for y in range(a + 1, b + 1)))
+    states = list(dict.fromkeys(part for y in range(a + 1, b + 1) for part in continuity.get((y - 1, y), "판정 없음").split("; ")))
     return "; ".join(states)
 
 
@@ -251,6 +253,8 @@ def build_guidelines() -> tuple[pd.DataFrame, pd.DataFrame]:
         if missing := [e for e in support + open_ if e not in by_id.index]:
             errors.append(f"{j.judgment_id}: 기록되지 않은 사실 {missing}")
             continue
+        if "superseded_by" in by_id and (old := [e for e in support + open_ if by_id.loc[e, "superseded_by"]]):
+            errors.append(f"{j.judgment_id}: 대체된 사실을 근거로 씀 {old} — superseded_by의 사실로 바꿀 것")
         # 승격 검사: '근거가 연결됐으니 확인'을 막는다. 미확인 사실은 미해결 쟁점 근거(open_evidence)로만
         if weak := [e for e in support if by_id.loc[e, "evidence_level"] == "미확인"]:
             errors.append(f"{j.judgment_id}: 확인 근거에 미확인 사실 {weak} — open_evidence로 옮길 것")

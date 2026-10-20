@@ -70,6 +70,11 @@ def test_continuity_judgment_flows_to_year_rows_and_spans():
     judgments.loc[1, "status"] = "연속성 확인"
     stats, _ = run_market.build_stats(parse_table(table_html(VALUES, GROWTH)), CONFIG, Path("run1"), META, run_market.continuity_by_pair(judgments))
     assert stats.set_index("year").loc[2023, "comparability"] == "직접 비교 가능"
+    # 입력 단계는 연속성 확인이어도 같은 구간의 집계 단계 판정이 미확인이면 직접 비교 가능이 아니다 (D22)
+    judgments = pd.concat([judgments, pd.DataFrame([{"judgment_id": "J04b", "question": "Q3 집계", "status": "미확인", "claim_years": "2022;2023"}])])
+    stats, _ = run_market.build_stats(parse_table(table_html(VALUES, GROWTH)), CONFIG, Path("run1"), META, run_market.continuity_by_pair(judgments))
+    row = stats.set_index("year").loc[2023]
+    assert (row.definition_continuity, row.comparability) == ("연속성 확인 (J04); 미확인 (J04b)", "연속성 미확인")
 
 
 def test_official_growth_mismatch_is_reported():
@@ -195,6 +200,7 @@ def test_full_confirmation_passes_only_for_explicitly_covered_years(tmp_path, mo
     # Q3에는 '확인'이 아니라 변경 확인 / 연속성 확인 / 미확인만 쓴다
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "status"), "확인"), "쓸 수 없는 상태"),
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((0, "evidence"), "S1;S99"), "S99"),
+    (lambda t: t.update({"stat_guideline_facts.csv": t["stat_guideline_facts.csv"].assign(superseded_by=["S3", ""])}), "대체된 사실"),
     # 승격 검사 (2026-10-20 검토 반례): 근거가 모두 미확인인데 '연속성 확인'
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "status"), "연속성 확인"), "확인 근거 없음"),
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "evidence"), "S2"), "확인 근거에 미확인 사실"),
@@ -215,8 +221,10 @@ def test_manual_guideline_records_keep_scores_off_and_q3_unconfirmed():
     # 작성지침 확인만으로 점수를 활성화하지 않는다 (11-3 완료 조건은 정의 확인·적용 범위까지)
     assert set(links.score_use) == {"미반영"} and links.score_eligibility.str.startswith("보류").all()
     assert (links.guideline_evidence != "").all()
-    q3 = judgments[judgments.question.str.startswith("Q3")]
-    assert set(q3.status) <= JUDGMENT_Q3 and len(q3) == 2
+    q3 = judgments[judgments.question.str.startswith("Q3")].set_index("judgment_id")
+    assert set(q3.status) <= JUDGMENT_Q3
+    # 집계·분류·사후 수정 방식은 미확보 — 입력 단계(J07) 연속성으로 J03·J04를 승격하지 않는다 (D22)
+    assert (q3.loc["J03", "status"], q3.loc["J04", "status"]) == ("미확인", "미확인")
 
 
 JUDGMENT_Q3 = run_market.JUDGMENT_STATUS["Q3"]

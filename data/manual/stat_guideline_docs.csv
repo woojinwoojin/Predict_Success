@@ -1,9 +1,9 @@
-doc_id,title,issuer,doc_type,url,version,applies_to_years,status,note,recorded_at
+﻿doc_id,title,issuer,doc_type,url,version,applies_to_years,status,note,recorded_at
 G01,생산단가 작성 방법 안내 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=12613&type=view,"게시판 현재본 — 등록일 2020-01-09, 수정 이력 표시 없음",수집 시점 현재본 (과거 연도에 적용된 문안인지 미확인),수집,게시글은 같은 주소에서 수정될 수 있음 (G04 참고),2026-10-20
-G02,해외 업체로부터 국내 제조사가 OEM 의뢰를 받아 바로 수출하는 경우 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15848&type=view,"게시판 현재본 — 등록일 2024-02-13",수집 시점 현재본 (2023년 실적 보고 기간 이후 게시),수집,,2026-10-20
-G03,생산실적 보고대상 관련 안내(수입만 하는 업체의 경우) (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15090&type=view,"게시판 현재본 — 등록일 2022-12-29",수집 시점 현재본 (2022년 실적 보고 기간 직전 게시),수집,,2026-10-20
+G02,해외 업체로부터 국내 제조사가 OEM 의뢰를 받아 바로 수출하는 경우 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15848&type=view,게시판 현재본 — 등록일 2024-02-13,수집 시점 현재본 (2023년 실적 보고 기간 이후 게시),수집,,2026-10-20
+G03,생산실적 보고대상 관련 안내(수입만 하는 업체의 경우) (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15090&type=view,게시판 현재본 — 등록일 2022-12-29,수집 시점 현재본 (2022년 실적 보고 기간 직전 게시),수집,,2026-10-20
 G04,휴업 또는 폐업한 경우 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=13517&type=view,"게시판 현재본 — 등록일 2021-01-06, 본문은 2025년도 기준",수집 시점 현재본,수집,등록일과 본문 연도가 다름 → 공지 본문이 같은 주소에서 갱신된다는 근거. 공지 현재본을 과거 연도의 지침으로 쓰지 않는다,2026-10-20
-G05,제품명이 같고 제조업자·용량 같은 경우 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15166&type=view,"게시판 현재본 — 등록일 2023-02-23",수집 시점 현재본,수집,,2026-10-20
+G05,제품명이 같고 제조업자·용량 같은 경우 (실적보고 공지사항),대한화장품협회,html,https://kcia.or.kr/report/product/notice.php?no=15166&type=view,게시판 현재본 — 등록일 2023-02-23,수집 시점 현재본,수집,,2026-10-20
 G06,2022년 화장품 생산실적 보고 안내 (대한장협 제1-1호),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202301_167262153804605_1.pdf,시행일자 2023-01-02,2022,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=15091 첨부 1,2026-10-20
 G07,2022년 생산실적 보고 작성요령,대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202301_167264100977082_2.pdf,게시 2023-01 (문서 자체 날짜 없음),2022,수집,게시글 no=15091 첨부 2. 실적보고 사이트의 '생산실적보고 메뉴얼.pdf'와 같은 파일(sha256 동일) — 매뉴얼 주소는 현재 이 판을 가리킴,2026-10-20
 G08,생산실적 엑셀서식 (2022년분 안내 첨부),대한화장품협회,xlsx,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202301_167262153854604_3.xlsx,게시 2023-01,2022,수집,게시글 no=15091 첨부 3. G11과 sha256 동일,2026-10-20
@@ -13,7 +13,18 @@ G11,생산실적 엑셀서식 (2024년분 안내 첨부),대한화장품협회,x
 G12,생산실적 및 원료목록 보고서 작성 요령 (2018),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&otb=B_NEWS&file_name=1.%EC%83%9D%EC%82%B0%EC%8B%A4%EC%A0%81%EB%B0%8F%EC%9B%90%EB%A3%8C%EB%AA%A9%EB%A1%9D%EB%B3%B4%EA%B3%A0%EC%84%9C%EC%9E%91%EC%84%B1%EC%9A%94%EB%A0%B9.pdf,ⓒ 2018 — 2017년 실적 보고용,2017,수집,분석 기간(2021~2025) 밖 — 서식 변경 비교용,2026-10-20
 G13,보도자료: 2021년 화장품 생산·수입·수출 통계자료 발표,식품의약품안전처 (대한화장품협회 게시 사본),pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202207_165717677890552_2.pdf,배포 2022-07-07,2021,수집,식약처 누리집 원본은 이번에 받지 않음 — 협회 게시 사본,2026-10-20
 G14,"보도자료: 화장품, 2년 연속 10조 수출 달성 (2022년 통계)",식품의약품안전처 (대한화장품협회 게시 사본),pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202307_168862426124021_2.pdf,배포 2023-07-06,2022,수집,식약처 누리집 원본은 이번에 받지 않음 — 협회 게시 사본,2026-10-20
-G15,e-나라지표 지표 3043 화장품 생산현황 (지표설명),식품의약품안전처 / e-나라지표,html,https://www.index.go.kr/unify/idx-info.do?idxCd=3043,"최근 갱신일 2026-09-03 (D18 수집본)",수집 시점 현재본,기존 보존,data/raw/stats/index_go_kr/3043/20261008T091318463077Z/indicator.html,2026-10-20
+G15,e-나라지표 지표 3043 화장품 생산현황 (지표설명),식품의약품안전처 / e-나라지표,html,https://www.index.go.kr/unify/idx-info.do?idxCd=3043,최근 갱신일 2026-09-03 (D18 수집본),수집 시점 현재본,기존 보존,data/raw/stats/index_go_kr/3043/20261008T091318463077Z/indicator.html,2026-10-20
 G16,통계설명자료 '화장품산업현황(145011)',통계청 국가통계 메타정보 (narastat),html,http://meta.narastat.kr/metasvc/svc/SvcMetaDcDtaPopup.do?orgId=145&confmNo=145011&kosisYn=Y,—,—,미확보,이 환경에서 도메인이 127.0.0.1로 해석되어 접속 불가 (원격 조회도 실패) — 작성대상·변경 이력 미확인,2026-10-20
 G17,고시 '화장품의 생산·수입실적 및 원료목록 보고에 관한 규정' 원문 (작성요령이 인용: 식품의약품안전처고시 제2019-18호),식품의약품안전처,—,https://www.law.go.kr/,—,—,미확보,국가법령정보센터 조회 실패 (행정규칙 본문·별지 서식·연혁 미확보) — 협회 작성요령의 설명으로만 확인,2026-10-20
-G18,2021·2023·2025년 실적분 보고 안내·작성요령·엑셀서식,대한화장품협회,—,https://kcia.or.kr/home/edu/edu_01.php,—,"2021, 2023, 2025",미확보,검색으로 찾지 못함 — 해당 연도의 서식·작성 문안은 2022·2024년분으로 간접 추정만 가능,2026-10-20
+G18,2025년 실적분 생산실적 보고 작성요령,대한화장품협회,—,https://kcia.or.kr/home/edu/edu_01.php,—,2025,미확보,2025년분 게시글(no=17128) 첨부는 공문·엑셀서식 2개뿐 — 작성요령 없음 (2021·2023년분은 G22~G27로 확보),2026-10-20
+G19,2020년 화장품 생산실적 보고 안내 (장협제1-1호),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202101_160982109407887_1.pdf,게시 2021-01,2020,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=13507 첨부,2026-10-20
+G20,2020년 생산실적 보고 작성요령,대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202101_160982109418372_3.pdf,게시 2021-01,2020,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=13507 첨부,2026-10-20
+G21,생산실적엑셀서식 (2020년분 안내 첨부),대한화장품협회,xlsx,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202101_160982109448187_2.xlsx,게시 2021-01,2020,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=13507 첨부,2026-10-20
+G22,2021년 화장품 생산실적 보고 안내 (장협제1-1호),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202201_164120190285613_1.pdf,게시 2022-01,2021,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=14306 첨부,2026-10-20
+G23,2021년 생산실적보고 메뉴얼,대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202201_164121184149953_2.pdf,게시 2022-01,2021,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=14306 첨부,2026-10-20
+G24,생산실적엑셀서식 (2021년분 안내 첨부),대한화장품협회,xlsx,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202201_164120040571698_3.xlsx,게시 2022-01,2021,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=14306 첨부,2026-10-20
+G25,2023년 화장품 생산실적 보고 안내 (장협제1-4호),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202401_170418130908265_1.pdf,게시 2024-01,2023,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=15785 첨부,2026-10-20
+G26,생산실적 엑셀서식 (2023년분 안내 첨부),대한화장품협회,xlsx,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202401_170418130912658_2.xlsx,게시 2024-01,2023,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=15785 첨부,2026-10-20
+G27,2023년 생산실적 보고 작성요령,대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202401_170418130994908_3.pdf,게시 2024-01,2023,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=15785 첨부,2026-10-20
+G28,2025년 화장품 생산실적 보고 안내 (장협제1-1호),대한화장품협회,pdf,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202601_176761011585522_1.pdf,게시 2026-01,2025,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=17128 첨부,2026-10-20
+G29,생산실적 엑셀서식 (2025년분 안내 첨부),대한화장품협회,xlsx,https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202601_176761011588956_2.xlsx,게시 2026-01,2025,수집,게시글 https://kcia.or.kr/home/edu/edu_01.php?type=view&no=17128 첨부,2026-10-20
