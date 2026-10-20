@@ -26,11 +26,26 @@ from src.normalization.build_facts import INTERIM, ROOT
 MANUAL = ROOT / "data" / "manual"
 
 
-def latest_raw(source: str) -> Path:
-    runs = sorted(p for p in (ROOT / source).iterdir() if (p / "metadata.json").exists())
-    if not runs:
-        raise FileNotFoundError(f"{source}에 수집본 없음 — python -m src.collectors.stats")
-    return runs[-1]
+def pinned_raw(source: str, run_id: str | None) -> tuple[Path, dict]:
+    """설정·명령행으로 지정한 수집본을 쓰고, 읽기 직전에 파일 해시를 다시 계산해 metadata와 대조한다.
+
+    '가장 최근 폴더'를 자동으로 고르지 않는다 — 새 수집본을 쓰려면 설정의 raw_run을 바꾼다(커밋에 입력 변경이 남음).
+    수집일은 공개일이 아니므로 run_id를 시점 판단에 쓰지 않는다.
+    """
+    root = ROOT / source
+    if not run_id:
+        runs = sorted(p.name for p in root.iterdir() if (p / "metadata.json").exists()) if root.exists() else []
+        raise ValueError(f"{source}: raw_run 미지정 — configs/market_v1.yaml에 수집본을 고정할 것 (있는 수집본: {runs})")
+    raw_dir = root / run_id
+    if not (raw_dir / "metadata.json").exists():
+        raise FileNotFoundError(f"지정한 수집본 없음: {raw_dir}")
+    meta = json.loads((raw_dir / "metadata.json").read_text(encoding="utf-8"))
+    files = meta.get("files") or {meta["file"]["name"]: meta["file"]}
+    for name, info in files.items():
+        actual = hashlib.sha256((raw_dir / name).read_bytes()).hexdigest()
+        if actual != info["sha256"]:
+            raise ValueError(f"원본 해시 불일치: {raw_dir / name} (기록 {info['sha256'][:12]}…, 실제 {actual[:12]}…)")
+    return raw_dir, meta
 
 
 def growth(a: Decimal | None, b: Decimal | None) -> Decimal | None:
@@ -49,7 +64,42 @@ def pct1(x) -> Decimal:
     return (Decimal(str(x)) * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
 
 
-def build_stats(table: dict, config: dict, raw_dir: Path, meta: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def continuity_by_pair(judgments: pd.DataFrame | None) -> dict[tuple[int, int], str]:
+    """Q3 판정표의 기간별 정의 연속성 (D20): 인접 연도 쌍 → '상태 (판정 ID)'. 판정이 다루지 않는 쌍은 없음."""
+    out = {}
+    if judgments is None:
+        return out
+    for j in judgments[judgments.question.str.startswith("Q3")].itertuples():
+        years = sorted(int(y) for y in j.claim_years.split(";") if y)
+        for a, b in zip(years, years[1:]):
+            if b == a + 1:
+                out[(a, b)] = f"{j.status} ({j.judgment_id})"
+    return out
+
+
+def pair_status(y: int, first: int, value_ok: bool, cautions: dict, continuity: dict) -> dict:
+    """계산 가능 여부 · 정의 연속성 · 종합 비교 상태를 따로 만든다.
+
+    공식 증감률과 산술로 일치해도(yoy_check) 정의 연속성이 확인된 것은 아니다 — '직접 비교 가능'은 연속성 확인 구간만.
+    """
+    pair = (y - 1, y)
+    cont = continuity.get(pair, "판정 없음")
+    if y == first:
+        calc, comp = "기초값 — 전년 대비 계산 안 함", "기초값"
+    elif not value_ok:
+        calc, comp = "계산 불가 — 값 없음", "계산 불가"
+    else:
+        calc = "계산"
+        comp = "비교 주의" if pair in cautions else ("직접 비교 가능" if cont.startswith("연속성 확인") else "연속성 미확인")
+    return {"calc_status": calc, "definition_continuity": cont, "comparability": comp, "caution": cautions.get(pair, "")}
+
+
+def span_continuity(a: int, b: int, continuity: dict) -> str:
+    states = list(dict.fromkeys(continuity.get((y - 1, y), "판정 없음") for y in range(a + 1, b + 1)))
+    return "; ".join(states)
+
+
+def build_stats(table: dict, config: dict, raw_dir: Path, meta: dict, continuity: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     base = config["base_statistic"]
     rows = {r["label"]: r for r in table["rows"] if "of" not in r}
     growth_rows = {r["of"]: r for r in table["rows"] if "of" in r}
@@ -61,13 +111,13 @@ def build_stats(table: dict, config: dict, raw_dir: Path, meta: dict) -> tuple[p
     for y in config["years"]:
         g = growth(series.get(y - 1), series.get(y))
         off = official.get(y)
-        check = "" if g is None or off is None else ("일치" if pct1(g) == off else f"불일치 (계산 {pct1(g)}%)")
+        check = ("대조 불가 — 계산값 없음" if g is None else "대조 불가 — 공식 증감률 없음" if off is None
+                 else "일치" if pct1(g) == off else f"불일치 (계산 {pct1(g)}%)")
         out.append({"candidate_id": base["candidate_id"], "label": base["label"], "year": y,
                     "value": series.get(y), "unit": "백만원", "yoy": None if g is None else float(g),
                     "yoy_pair": f"{y - 1}→{y}", "official_yoy_pct": off, "yoy_check": check,
                     **{f"context_{k}": v.get(y) for k, v in context.items()},
-                    "comparability": "비교 주의" if (y - 1, y) in cautions else ("기초값" if y == config["years"][0] else "직접 비교 가능"),
-                    "caution": cautions.get((y - 1, y), ""),
+                    **pair_status(y, config["years"][0], g is not None, cautions, continuity or {}),
                     "raw_run": raw_dir.name, "raw_sha256": meta["files"]["table.html"]["sha256"],
                     "page_updated": meta["page_dates"].get("updated"), "source": table["source"], "release_rule": table["release_rule"]})
     stats = pd.DataFrame(out)
@@ -76,11 +126,14 @@ def build_stats(table: dict, config: dict, raw_dir: Path, meta: dict) -> tuple[p
         within = [t for (p, q), t in cautions.items() if a <= p and q <= b]
         summary.append({"candidate_id": base["candidate_id"], "span": f"{a}→{b}", "years": b - a,
                         "start": series.get(a), "end": series.get(b), "cagr": cagr(series.get(a), series.get(b), b - a),
+                        "role": config.get("cagr_span_roles", {}).get(f"{a}→{b}", ""),
+                        "definition_continuity": span_continuity(a, b, continuity or {}),
                         "caution": "; ".join(within) if within else "", "score_use": config["score_use"]})
     return stats, pd.DataFrame(summary)
 
 
-def build_types(parsed: dict, config: dict, m01: pd.DataFrame, raw_dir: Path, meta: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_types(parsed: dict, config: dict, m01: pd.DataFrame, raw_dir: Path, meta: dict,
+                continuity: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """유형별 생산실적: 연도별 값·전년 대비·합계 대비 비중. 유형 합과 합계, 합계와 M01을 대조하고 다르면 중단한다."""
     ts = config["type_statistic"]
     rows = {r["label"]: r["values"] for r in parsed["rows"]}
@@ -115,13 +168,15 @@ def build_types(parsed: dict, config: dict, m01: pd.DataFrame, raw_dir: Path, me
                         "yoy": None if g is None else float(g), "yoy_pair": f"{y - 1}→{y}",
                         "share_of_total": None if not total.get(y) or cur is None else float(cur / total[y]),
                         "change_vs_prior": None if cur is None or prior is None else cur - prior,
-                        "comparability": "비교 주의" if (y - 1, y) in cautions else ("기초값" if y == config["years"][0] else "직접 비교 가능"),
+                        **pair_status(y, config["years"][0], g is not None, cautions, continuity or {}),
                         "type_sum_check": sum_check.get(y, "") if label == ts["total_label"] else "",
                         "raw_run": raw_dir.name, "raw_sha256": meta["file"]["sha256"], "page_updated": meta["page_dates"]["updated"]})
         for a, b in config["cagr_spans"]:
             within = [t for (x, z), t in cautions.items() if a <= x and z <= b]
             summary.append({"candidate_id": ts["candidate_id"], "series": label, "span": f"{a}→{b}", "years": b - a,
                             "start": values.get(a), "end": values.get(b), "cagr": cagr(values.get(a), values.get(b), b - a),
+                            "role": config.get("cagr_span_roles", {}).get(f"{a}→{b}", ""),
+                            "definition_continuity": span_continuity(a, b, continuity or {}),
                             "caution": "; ".join(within), "score_use": config["score_use"]})
     return pd.DataFrame(out), pd.DataFrame(summary)
 
@@ -152,6 +207,7 @@ EVIDENCE_LEVELS = {"명시적 확인", "간접 근거", "미확인"}
 # Q1·Q2는 정의 확인, Q3는 연속성 — '변경 언급을 찾지 못함'과 '연속성 확인'을 구분한다 (D20)
 JUDGMENT_STATUS = {"Q1": {"확인", "부분 확인", "미확인"}, "Q2": {"확인", "부분 확인", "미확인"},
                    "Q3": {"변경 확인", "연속성 확인", "미확인"}, "공통": {"확인", "미확인"}}
+FULL_STATUS = {"확인", "변경 확인", "연속성 확인"}  # 주장 연도 전부에 명시 확인 근거가 필요한 상태
 
 
 def build_guidelines() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -160,6 +216,8 @@ def build_guidelines() -> tuple[pd.DataFrame, pd.DataFrame]:
     - 사실의 문서는 등록부에 있어야 하고, 보존된 원본의 sha256이 기록과 같아야 한다
     - 미확보 문서만 가리키는 사실은 '미확인'이어야 한다 (찾지 못함을 확인으로 쓰지 않음)
     - 판정의 근거는 기록된 사실이어야 하고, 상태는 질문별로 정한 값만 쓴다
+    - 확인 근거(evidence)와 미해결 쟁점 근거(open_evidence)를 나눈다. 확인 근거에 미확인 사실을 넣지 않고,
+      '확인'·'변경 확인'·'연속성 확인'은 claim_years의 모든 연도에 그해 명시 확인 사실(fact_years)이 있어야 한다
     """
     docs = read_manual("stat_guideline_docs.csv").set_index("doc_id")
     facts, judgments = read_manual("stat_guideline_facts.csv"), read_manual("stat_guideline_judgments.csv")
@@ -184,13 +242,29 @@ def build_guidelines() -> tuple[pd.DataFrame, pd.DataFrame]:
                 errors.append(f"{f.fact_id}: 원본 없음 {path}")
             elif hashlib.sha256(file.read_bytes()).hexdigest() != digest:
                 errors.append(f"{f.fact_id}: 원본 해시 불일치 {path}")
-    fact_ids = set(facts.fact_id)
+    by_id = facts.set_index("fact_id")
     for j in judgments.itertuples():
         q = j.question.split()[0]
         if j.status not in JUDGMENT_STATUS.get(q, set()):
             errors.append(f"{j.judgment_id}: '{j.question}'에 쓸 수 없는 상태 '{j.status}'")
-        if missing := [e for e in j.evidence.split(";") if e not in fact_ids]:
+        support, open_ = [e for e in j.evidence.split(";") if e], [e for e in j.open_evidence.split(";") if e]
+        if missing := [e for e in support + open_ if e not in by_id.index]:
             errors.append(f"{j.judgment_id}: 기록되지 않은 사실 {missing}")
+            continue
+        # 승격 검사: '근거가 연결됐으니 확인'을 막는다. 미확인 사실은 미해결 쟁점 근거(open_evidence)로만
+        if weak := [e for e in support if by_id.loc[e, "evidence_level"] == "미확인"]:
+            errors.append(f"{j.judgment_id}: 확인 근거에 미확인 사실 {weak} — open_evidence로 옮길 것")
+        if j.status != "미확인" and not support:
+            errors.append(f"{j.judgment_id}: '{j.status}'인데 확인 근거 없음")
+        if j.status in FULL_STATUS:
+            # 주장하는 연도마다 그해 문서로 명시 확인된 사실이 있어야 한다 (현재본 공지·다른 연도 문서는 간접)
+            explicit = {y for e in support if by_id.loc[e, "evidence_level"] == "명시적 확인"
+                        for y in by_id.loc[e, "fact_years"].split(";") if y}
+            claim = [y for y in j.claim_years.split(";") if y]
+            if not claim:
+                errors.append(f"{j.judgment_id}: '{j.status}'인데 claim_years 없음")
+            elif uncovered := [y for y in claim if y not in explicit]:
+                errors.append(f"{j.judgment_id}: '{j.status}'인데 명시 확인 근거가 없는 연도 {uncovered}")
     if errors:
         raise ValueError("작성지침 기록 확인 실패:\n" + "\n".join(errors))
     return facts, judgments
@@ -231,6 +305,7 @@ def type_section(w, config: dict, types: pd.DataFrame, type_summary: pd.DataFram
     w(f"- {first} 합계 감소 {int(total_change):,}억원 중 {top.type} {int(top.change_vs_prior):,}억원"
       f"({float(top.change_vs_prior / total_change) * 100:.0f}%). 감소가 어느 유형에 몰렸는지만 보여 주며 원인은 추정하지 않는다")
     w("- 유형별 값도 책임판매업체 보고 생산금액(명목)이다. 기업의 제품 구성과 통계 분류가 맞을 때만 제품 범위 보완에 쓴다")
+    w("- 정의 연속성은 M01과 같다(같은 보고 자료, J05): 연도별 상태는 `market_types_2021_2025.csv`의 definition_continuity·comparability")
     w("")
 
 
@@ -239,10 +314,11 @@ def guideline_section(w, facts: pd.DataFrame, judgments: pd.DataFrame) -> None:
     w("")
     w("통계 정의를 확인하는 것과 점수에 쓸 자격을 얻는 것은 다른 단계다. 이 절은 정의 확인과 기업별 적용 범위까지이며, 점수는 바꾸지 않는다.")
     w("")
-    w("| ID | 질문 | 적용 연도 | 상태 | 확인한 것 | 남은 불확실성 | 결과 | 근거 |")
-    w("|---|---|---|---|---|---|---|---|")
+    w("| ID | 질문 | 적용 연도 | 상태 | 확인한 것 | 남은 불확실성 | 결과 | 확인 근거 | 미해결 쟁점 근거 |")
+    w("|---|---|---|---|---|---|---|---|---|")
     for j in judgments.itertuples():
-        w(f"| {j.judgment_id} | {j.question} | {j.applies_years} | **{j.status}** | {j.confirmed} | {j.remaining_uncertainty} | {j.consequence} | {j.evidence.replace(';', ', ')} |")
+        w(f"| {j.judgment_id} | {j.question} | {j.applies_years} | **{j.status}** | {j.confirmed} | {j.remaining_uncertainty} | {j.consequence} | "
+          f"{j.evidence.replace(';', ', ') or '—'} | {j.open_evidence.replace(';', ', ') or '—'} |")
     w("")
     w("| ID | 질문 | 주제 | 적용 연도 | 근거 수준 | 문서 (판·위치) | 해석 |")
     w("|---|---|---|---|---|---|---|")
@@ -289,18 +365,21 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
     w("## 2. 국내 화장품 생산금액 추세")
     w("")
     ctx = [c for c in stats.columns if c.startswith("context_")]
-    w("| 연도 | 생산금액 (백만원) | 전년 대비 | 공식 증감률 | 대조 | " + " | ".join(c.replace("context_", "보고 ") for c in ctx) + " | 비교 |")
-    w("|---|---:|---:|---:|---|" + "---:|" * len(ctx) + "---|")
+    w("| 연도 | 생산금액 (백만원) | 전년 대비 | 공식 증감률 | 대조 | " + " | ".join(c.replace("context_", "보고 ") for c in ctx) + " | 정의 연속성 (Q3) | 비교 |")
+    w("|---|---:|---:|---:|---|" + "---:|" * len(ctx) + "---|---|")
     for r in stats.itertuples():
         extra = " | ".join(f"{int(getattr(r, c)):,}" if getattr(r, c) is not None else "" for c in ctx)
         w(f"| {r.year} | {int(r.value):,} | {fmt(r.yoy) if r.yoy is not None and not pd.isna(r.yoy) else '—'} | "
-          f"{'' if r.official_yoy_pct is None else str(r.official_yoy_pct) + '%'} | {r.yoy_check or '—'} | {extra} | {r.comparability}{(' — ' + r.caution) if r.caution else ''} |")
+          f"{'' if r.official_yoy_pct is None else str(r.official_yoy_pct) + '%'} | {r.yoy_check or '—'} | {extra} | {r.definition_continuity} | {r.comparability}{(' — ' + r.caution) if r.caution else ''} |")
     w("")
     roles = config.get("cagr_span_roles", {})
-    w("| 기간 | 용도 | 연평균 성장률 | 주의 |")
-    w("|---|---|---:|---|")
+    w("| 기간 | 용도 | 연평균 성장률 | 정의 연속성 (Q3) | 주의 |")
+    w("|---|---|---:|---|---|")
     for s in summary.itertuples():
-        w(f"| {s.span} ({s.years}년) | {roles.get(s.span, '—')} | {fmt(s.cagr)} | {s.caution or '—'} |")
+        w(f"| {s.span} ({s.years}년) | {roles.get(s.span, '—')} | {fmt(s.cagr)} | {s.definition_continuity} | {s.caution or '—'} |")
+    w("")
+    w("- '대조'는 계산 증감률과 공식 증감률의 산술 일치일 뿐이다. 정의·범위가 연속인지는 '정의 연속성'(작성지침 판정)이 따로 말하며, "
+      "'직접 비교 가능'은 연속성이 확인된 구간에만 붙는다")
     w("")
     w("- 연평균 성장률은 시작 연도에 민감하다. 2021에서 2022로 크게 줄었기 때문에 2022 시작은 높게, 2021 시작은 낮게 나온다. 유리한 숫자를 고르는 문제가 아니다: "
       "2022→2025는 재무 회고 추세와 맞춘 기본 비교 기간(연속성 미확인), 2021→2025는 시작점 민감도 확인용. 어느 쪽도 '시장 성장률'로 단정하지 않는다")
@@ -335,9 +414,11 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
             for r in sub.itertuples():
                 w(f"| {r.company} | {r.application_scope} | {r.proxy_role} | {r.score_eligibility} | {r.guideline_evidence.replace(';', ', ')} |")
         w("")
-    w("어느 기업도 '비교 가능'으로 판정하지 않았다. 통계(책임판매업자가 보고한 국내 제조품의 부가세 포함 출하가 기준 금액)와 기업 매출(부가세 제외, 연결 범위)은 "
-      "측정 대상·평가 기준이 다르다고 작성 안내로 확인됐다(J01·J02). 국내 고객사의 ODM 물량은 고객사 실적에 들어가므로 통계는 ODM 수요의 직접 측정이 아니라 "
-      "고객 측 생산 활동의 간접 지표 후보일 뿐이다. 시장점유율이나 '시장 대비 성장 격차'를 계산하지 않는다.")
+    w("어느 기업도 '비교 가능'으로 판정하지 않았다. 통계는 책임판매업자가 보고한 국내 제조 화장품 금액이고, 기업 값은 연결 매출이다. "
+      "보고 주체·범위가 다르다는 것은 2022·2024년분 문서로 확인했다(J02). 가격 기준은 '부분 확인'이다(J01): 부가세 포함 출하가 기준이라는 설명은 "
+      "2017년분 작성요령과 수집 시점의 공지 현재본에 있을 뿐, 분석 대상 연도(2021~2025)의 작성요령에는 그 문구가 없다. "
+      "국내 고객사의 ODM 물량은 고객사 실적에 들어가므로 통계는 ODM 수요의 직접 측정이 아니라 고객 측 생산 활동의 간접 지표 후보일 뿐이다. "
+      "시장점유율이나 '시장 대비 성장 격차'를 계산하지 않는다.")
     w("")
     w("### 근거 사실 (사업보고서 원문)")
     w("")
@@ -355,22 +436,24 @@ def report(as_of: str, config: dict, stats: pd.DataFrame, summary: pd.DataFrame,
     return "\n".join(L) + "\n"
 
 
-def main(as_of: str) -> dict:
+def main(as_of: str, runs: dict | None = None) -> dict:
+    """runs: {"M01": run_id, "M02": run_id} — 설정의 raw_run 대신 쓸 수집본 (과거 실행 재현용)."""
     config = yaml.safe_load((ROOT / "configs" / "market_v1.yaml").read_text(encoding="utf-8"))
-    raw_dir = latest_raw(config["base_statistic"]["raw_source"])
-    meta = json.loads((raw_dir / "metadata.json").read_text(encoding="utf-8"))
+    runs = runs or {}
+    base = config["base_statistic"]
+    raw_dir, meta = pinned_raw(base["raw_source"], runs.get(base["candidate_id"]) or base.get("raw_run"))
     table = parse_table((raw_dir / "table.html").read_text(encoding="utf-8"))
-    stats, summary = build_stats(table, config, raw_dir, meta)
+    guidelines = build_guidelines()
+    continuity = continuity_by_pair(guidelines[1])
+    stats, summary = build_stats(table, config, raw_dir, meta, continuity)
     bad = stats[stats.yoy_check.str.startswith("불일치")]
     if not bad.empty:
         raise ValueError(f"계산 증감률이 공식 표와 다름:\n{bad[['year', 'yoy_check']]}")
     ts = config["type_statistic"]
-    type_dir = latest_raw(ts["raw_source"])
-    type_meta = json.loads((type_dir / "metadata.json").read_text(encoding="utf-8"))
+    type_dir, type_meta = pinned_raw(ts["raw_source"], runs.get(ts["candidate_id"]) or ts.get("raw_run"))
     parsed = parse_kosis_csv((type_dir / type_meta["file"]["name"]).read_bytes(), type_meta["encoding"])
-    types, type_summary = build_types(parsed, config, stats, type_dir, type_meta)
+    types, type_summary = build_types(parsed, config, stats, type_dir, type_meta, continuity)
     links = build_links()
-    guidelines = build_guidelines()
     stats.to_csv(INTERIM / "market_stats_2021_2025.csv", index=False, encoding="utf-8-sig")
     pd.concat([summary.assign(series=config["base_statistic"]["series"]), type_summary], ignore_index=True).to_csv(
         INTERIM / "market_summary_2021_2025.csv", index=False, encoding="utf-8-sig")
@@ -379,7 +462,7 @@ def main(as_of: str) -> dict:
     (INTERIM / "reports").mkdir(exist_ok=True)
     path = INTERIM / "reports" / f"market_stats_{as_of}.md"
     path.write_text(report(as_of, config, stats, summary, links, meta, table, types, type_summary, guidelines), encoding="utf-8")
-    print("[시장 통계]", stats[["year", "value", "yoy_check", "comparability"]].to_string(index=False))
+    print("[시장 통계]", stats[["year", "value", "yoy_check", "definition_continuity", "comparability"]].to_string(index=False))
     print("[연평균]", summary[["span", "cagr"]].to_string(index=False))
     print("[연결 판정]", links.groupby(["candidate_id", "judgement"]).size().to_dict(), "→", path)
     print("[작성지침]", dict(zip(guidelines[1].judgment_id + " " + guidelines[1].question, guidelines[1].status)))
@@ -388,4 +471,6 @@ def main(as_of: str) -> dict:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "20261008")
+    # python -m src.market.run_market 20261020 [M01=<run_id>] [M02=<run_id>]
+    args = sys.argv[1:]
+    main(args[0] if args and "=" not in args[0] else "20261008", dict(a.split("=", 1) for a in args if "=" in a))

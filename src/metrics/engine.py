@@ -16,6 +16,9 @@ INPUT_TO_CALC = {"mapped": "normal", "candidate": "reference"}
 
 
 PERIOD_OK = {"from_filing_text", "from_manual"}
+# 적자·유출로 음수가 될 수 있는 흐름 계정. 그 밖의 입력(자산·부채·현금·매출·매출원가·이자비용 등)의 음수는
+# 실적이 아니라 부호·계정 정의 문제일 수 있으므로 확인 전까지 계산·점수를 보류한다 (분모 0과 구분)
+SIGNED_ACCOUNTS = {"operating_income", "net_income", "operating_cash_flow"}
 
 
 @dataclass
@@ -82,6 +85,12 @@ def combine(result: Result, inputs: list[Input]) -> Result:
             result.hold_reasons.append(f"{i.label} {i.year}: 후보값 — {i.note[:60]}")
         elif i.calc_status == "not_computed":
             result.hold_reasons.append(f"{i.label} {i.year}: {i.status} — {i.note[:60]}")
+    negative = [i for i in inputs if i.calc_status != "not_computed" and i.value is not None and i.value < 0
+                and (i.account or i.label) not in SIGNED_ACCOUNTS]
+    for i in negative:
+        result.hold_reasons.append(f"{i.label} {i.year}: 음수 {i.value:,.0f} — 부호·계정 정의 확인 전 계산 보류")
+    if negative:
+        worst = result.calc_status = "not_computed"
     if worst != "normal":
         result.score_eligible = "보류"
     return result

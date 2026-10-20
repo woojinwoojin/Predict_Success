@@ -198,10 +198,13 @@ def market_answer(corp: str, as_of: str) -> str:
     links = read("market_links.csv")
     links = links[(links.corp_code == corp) & (links.candidate_id == "M01")]
     summary = read("market_summary_2021_2025.csv")
-    cagr = "; ".join(f"{r.span} 연평균 {float(r.cagr) * 100:.1f}%" for r in summary.itertuples() if r.cagr)
+    summary = summary[summary.series == summary.series.iloc[0]] if "series" in summary else summary  # M01 (합계) 행만
+    cagr = "; ".join(f"{r.span} 연평균 {float(r.cagr) * 100:.1f}%"
+                     + (f" ({r.role.split(' — ')[0]}, 정의 연속성 {r.definition_continuity})" if getattr(r, "role", "") else "")
+                     for r in summary.itertuples() if r.cagr)
     judge = f"{links.judgement.iloc[0]} — {links.differences.iloc[0]}" if not links.empty else "연결 판정 없음"
     return (f"| ① 시장이 숫자로 성장하는가 | **부분 답변** | 국내 화장품 생산금액(책임판매업체 보고, 명목)의 회고 추세만 제시: {cagr} "
-            f"(시작 연도에 민감, 2021→2022 -18.4% 원인 미확인). 이 회사와의 연결: **{esc(judge)}**. "
+            f"(시작 연도에 민감, 2021→2022 -18.4%는 작성 기준 변경 여부 미확인 — 비교 주의). 이 회사와의 연결: **{esc(judge)}**. "
             f"글로벌 수요·ODM 시장 성장률이 아니며 점수 미반영 — `market_stats_{as_of}.md` |")
 
 

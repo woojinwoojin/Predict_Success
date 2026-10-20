@@ -155,3 +155,30 @@ def test_duplicate_calculation_input_rows_raise():
     check = pd.DataFrame([row, {**row, "value": "2"}])
     with pytest.raises(ValueError, match="중복"):
         make_getter(check, "c", "CFS")("revenue", 2025)
+
+
+# ---- 음수 분모·음수 잔액 (2026-10-20 검토 반례): 분모 0과 구분하고, 확인 전 계산·점수 보류
+from src.metrics.engine import cash_to_short_term_debt  # noqa: E402
+
+
+@pytest.mark.parametrize("metric, values", [
+    (interest_coverage, {("operating_income", 2025): -400, ("interest_expense", 2025): -100}),  # 이전: 4배 → 정상
+    (lambda g: current_ratios(g)[0], {("adjusted_current_assets", 2025): 5, ("adjusted_current_liabilities", 2025): -4,
+                                      ("current_liabilities", 2025): 4}),
+    (lambda g: current_ratios(g)[1], {("current_assets", 2025): 5, ("current_liabilities", 2025): -4}),
+    (cash_to_short_term_debt, {("cash", 2025): 5, ("short_term_interest_bearing_debt", 2025): -4}),
+    (cash_to_short_term_debt, {("cash", 2025): -5, ("short_term_interest_bearing_debt", 2025): 4}),
+    # 끝 연도 매출 음수 — 이전에는 음수의 세제곱근이 복소수로 나왔다
+    (revenue_cagr_3y, {("revenue", 2022): 100, ("revenue", 2025): -50}),
+])
+def test_negative_denominator_or_balance_is_held_not_scored(metric, values):
+    r = finalize(metric(getter(values)))
+    assert (r.calc_status, r.value) == ("not_computed", None)
+    assert r.score_eligible.startswith("보류") and any("음수" in h for h in r.hold_reasons)
+
+
+def test_negative_numerator_from_losses_stays_an_observation():
+    r = interest_coverage(getter({("operating_income", 2025): -400, ("interest_expense", 2025): 100}))
+    assert (r.calc_status, r.value, r.score_eligible) == ("normal", -4.0, "가능")
+    r = ocf_to_avg_assets(getter({("operating_cash_flow", 2025): -10, ("total_assets", 2024): 90, ("total_assets", 2025): 110}))
+    assert (r.calc_status, r.value) == ("normal", -0.1)

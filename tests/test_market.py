@@ -47,12 +47,29 @@ def test_stats_check_computed_growth_against_official_and_mark_caution_pair():
     stats, summary = run_market.build_stats(parse_table(table_html(VALUES, GROWTH)), CONFIG, Path("run1"), META)
     by = stats.set_index("year")
     assert list(by.yoy_check) == ["일치", "일치", "일치"]
-    assert by.loc[2022, "comparability"] == "비교 주의" and by.loc[2023, "comparability"] == "직접 비교 가능"
+    # 산술 일치만으로는 '직접 비교 가능'이 아니다 — 판정이 없으면 연속성 미확인
+    assert by.loc[2022, "comparability"] == "비교 주의" and by.loc[2023, "comparability"] == "연속성 미확인"
+    assert by.loc[2023, "definition_continuity"] == "판정 없음" and by.loc[2021, "comparability"] == "기초값"
     assert by.loc[2021, "context_업체수"] == Decimal("9359")
     s = summary.set_index("span")
     assert s.loc["2022→2023", "caution"] == ""  # 주의 구간이 기간 밖
     assert "원인 미확인" in s.loc["2021→2023", "caution"]
     assert abs(s.loc["2022→2023", "cagr"] - (14510243 / 13590776 - 1)) < 1e-12
+
+
+def test_continuity_judgment_flows_to_year_rows_and_spans():
+    judgments = pd.DataFrame([
+        {"judgment_id": "J03", "question": "Q3 연속성 — 2021→2022", "status": "미확인", "claim_years": "2021;2022"},
+        {"judgment_id": "J04", "question": "Q3 연속성 — 2022→2023", "status": "미확인", "claim_years": "2022;2023"}])
+    cont = run_market.continuity_by_pair(judgments)
+    stats, summary = run_market.build_stats(parse_table(table_html(VALUES, GROWTH)), CONFIG, Path("run1"), META, cont)
+    by = stats.set_index("year")
+    # 2026-10-20 검토 반례: J04 미확인인데 2023이 '직접 비교 가능'으로 나오던 경로
+    assert (by.loc[2023, "yoy_check"], by.loc[2023, "definition_continuity"], by.loc[2023, "comparability"]) == ("일치", "미확인 (J04)", "연속성 미확인")
+    assert summary.set_index("span").loc["2021→2023", "definition_continuity"] == "미확인 (J03); 미확인 (J04)"
+    judgments.loc[1, "status"] = "연속성 확인"
+    stats, _ = run_market.build_stats(parse_table(table_html(VALUES, GROWTH)), CONFIG, Path("run1"), META, run_market.continuity_by_pair(judgments))
+    assert stats.set_index("year").loc[2023, "comparability"] == "직접 비교 가능"
 
 
 def test_official_growth_mismatch_is_reported():
@@ -144,11 +161,11 @@ def guideline_tables(tmp_path):
     return {
         "stat_guideline_docs.csv": pd.DataFrame([{"doc_id": "G1", "status": "수집"}, {"doc_id": "G9", "status": "미확보"}]),
         "stat_guideline_facts.csv": pd.DataFrame([
-            {"fact_id": "S1", "doc_id": "G1", "evidence_level": "명시적 확인", "raw_path": "data/raw/g.pdf", "sha256": digest},
-            {"fact_id": "S2", "doc_id": "G9", "evidence_level": "미확인", "raw_path": "", "sha256": ""}]),
+            {"fact_id": "S1", "doc_id": "G1", "evidence_level": "명시적 확인", "raw_path": "data/raw/g.pdf", "sha256": digest, "fact_years": "2022"},
+            {"fact_id": "S2", "doc_id": "G9", "evidence_level": "미확인", "raw_path": "", "sha256": "", "fact_years": ""}]),
         "stat_guideline_judgments.csv": pd.DataFrame([
-            {"judgment_id": "J1", "question": "Q1 가격 기준", "status": "부분 확인", "evidence": "S1"},
-            {"judgment_id": "J2", "question": "Q3 연속성", "status": "미확인", "evidence": "S2"}]),
+            {"judgment_id": "J1", "question": "Q1 가격 기준", "status": "부분 확인", "claim_years": "2021;2022", "evidence": "S1", "open_evidence": "S2"},
+            {"judgment_id": "J2", "question": "Q3 연속성", "status": "미확인", "claim_years": "2021;2022", "evidence": "", "open_evidence": "S2"}]),
     }
 
 
@@ -163,6 +180,12 @@ def test_guidelines_pass_when_raw_hash_and_evidence_match(tmp_path, monkeypatch)
     assert list(judgments.status) == ["부분 확인", "미확인"]
 
 
+def test_full_confirmation_passes_only_for_explicitly_covered_years(tmp_path, monkeypatch):
+    tables = guideline_tables(tmp_path)
+    tables["stat_guideline_judgments.csv"].loc[0, ["status", "claim_years"]] = ["확인", "2022"]
+    assert run_guidelines(tables, tmp_path, monkeypatch)[1].status.iloc[0] == "확인"
+
+
 @pytest.mark.parametrize("change, message", [
     (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((0, "sha256"), "0" * 64), "해시 불일치"),
     (lambda t: t["stat_guideline_facts.csv"].loc.__setitem__((0, "doc_id"), "G7"), "등록부에 없는 문서"),
@@ -172,6 +195,11 @@ def test_guidelines_pass_when_raw_hash_and_evidence_match(tmp_path, monkeypatch)
     # Q3에는 '확인'이 아니라 변경 확인 / 연속성 확인 / 미확인만 쓴다
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "status"), "확인"), "쓸 수 없는 상태"),
     (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((0, "evidence"), "S1;S99"), "S99"),
+    # 승격 검사 (2026-10-20 검토 반례): 근거가 모두 미확인인데 '연속성 확인'
+    (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "status"), "연속성 확인"), "확인 근거 없음"),
+    (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((1, "evidence"), "S2"), "확인 근거에 미확인 사실"),
+    # '확인'은 주장 연도마다 그해 명시 근거가 필요 — 2022 문서로 2021까지 확인하지 않는다
+    (lambda t: t["stat_guideline_judgments.csv"].loc.__setitem__((0, "status"), "확인"), r"명시 확인 근거가 없는 연도 \['2021'\]"),
 ])
 def test_guidelines_stop_on_broken_evidence(tmp_path, monkeypatch, change, message):
     tables = guideline_tables(tmp_path)
@@ -198,3 +226,39 @@ JUDGMENT_Q3 = run_market.JUDGMENT_STATUS["Q3"]
 def test_manual_guideline_records_match_preserved_raw():
     facts, judgments = run_market.build_guidelines()
     assert len(facts) >= 20 and set(judgments.judgment_id) >= {"J01", "J02", "J03", "J04", "J05"}
+
+
+# ---------------------------------------------------------------- 시장 원본 고정 (D21)
+def write_run(root, run_id, content=b"<table/>"):
+    import json
+    d = root / "src_stats" / run_id
+    d.mkdir(parents=True)
+    (d / "table.html").write_bytes(content)
+    (d / "metadata.json").write_text(json.dumps({"files": {"table.html": {"sha256": hashlib.sha256(content).hexdigest()}}}), encoding="utf-8")
+    return d
+
+
+def test_pinned_raw_uses_the_named_run_not_the_latest(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_market, "ROOT", tmp_path)
+    write_run(tmp_path, "20261001T000000Z")
+    write_run(tmp_path, "20261009T000000Z")
+    raw_dir, _ = run_market.pinned_raw("src_stats", "20261001T000000Z")
+    assert raw_dir.name == "20261001T000000Z"
+    with pytest.raises(ValueError, match="raw_run 미지정"):
+        run_market.pinned_raw("src_stats", None)
+    with pytest.raises(FileNotFoundError):
+        run_market.pinned_raw("src_stats", "20261005T000000Z")
+
+
+def test_pinned_raw_stops_when_file_changed_after_collection(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_market, "ROOT", tmp_path)
+    d = write_run(tmp_path, "20261001T000000Z")
+    (d / "table.html").write_bytes(b"<table>changed</table>")
+    with pytest.raises(ValueError, match="원본 해시 불일치"):
+        run_market.pinned_raw("src_stats", "20261001T000000Z")
+
+
+def test_market_config_pins_both_raw_runs():
+    import yaml
+    config = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "market_v1.yaml").read_text(encoding="utf-8"))
+    assert config["base_statistic"]["raw_run"] and config["type_statistic"]["raw_run"]

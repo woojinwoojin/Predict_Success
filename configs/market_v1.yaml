@@ -8,6 +8,7 @@ years: [2021, 2022, 2023, 2024, 2025]  # 2021은 2022 증감률의 기초값
 base_statistic:
   candidate_id: M01
   raw_source: data/raw/stats/index_go_kr/3043
+  raw_run: 20261008T091318463077Z  # 사용할 수집본을 고정 (D21) — 자동으로 최신을 고르지 않음. 읽기 직전 해시 대조
   series: 생산금액
   growth_series: 전년대비 성장률  # 공식 표의 증감률 — 계산값과 소수 첫째 자리까지 대조
   context_series: [업체수]  # 생산실적을 보고한 책임판매업체 수 — 집계 대상이 해마다 달라진다
@@ -31,6 +32,7 @@ judgements:
 type_statistic:
   candidate_id: M02
   raw_source: data/raw/stats/kosis/DT_145011_A013
+  raw_run: 20261008T093348189185Z  # 사용자가 내려받은 원표 (D19)
   total_label: 합계
   unit: 억원
   # 합계가 M01 생산금액(백만원)을 억원으로 반올림한 값과 같은지 확인 (같은 통계의 두 표)
